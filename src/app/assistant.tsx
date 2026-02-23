@@ -21,7 +21,7 @@ export const Assistant = () => {
       <div className="flex flex-col h-full bg-white relative">
         <header className="flex items-center h-[77px] px-4 shrink-0 bg-white z-10 gap-2">
           <Button variant="ghost" size="icon" className="text-slate-500 hover:text-slate-700 hover:bg-slate-100 shrink-0 rounded-full w-9 h-9 p-0 transition-colors">
-            <Icon icon="ep:arrow-left-bold" className="w-9 h-9" />
+            <Icon icon="ep:arrow-left-bold" style={{ fontSize: '24px' }} className="text-slate-500 hover:text-slate-700 hover:bg-slate-100 shrink-0 transition-colors" />
           </Button>
 
           <div className="flex items-center gap-2">

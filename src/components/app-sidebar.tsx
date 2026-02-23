@@ -1,7 +1,8 @@
 "use client"
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { SquarePen, Folder } from "lucide-react"
+import { SquarePen } from "lucide-react"
+import { Icon } from "@iconify/react";
 
 import {
     Sidebar,
@@ -19,12 +20,10 @@ const historyItems = [
     {
         title: "มีคอมพิวเตอร์ว่างให้ยืมไหม",
         url: "#",
-        icon: Folder,
     },
     {
         title: "วันนี้มีโต๊ะเหลือว่างให้ยืมบ้างไหม",
         url: "#",
-        icon: Folder,
     },
 ]
 
@@ -38,7 +37,7 @@ export function AppSidebar() {
                         onClick={() => router.push('/chat')}
                         className="w-[297px] h-[54px] text-base flex gap-3 items-center text-slate-800 hover:bg-slate-100 rounded-xl px-4 transition-colors"
                     >
-                        <SquarePen className="w-5 h-5 shrink-0" />
+                        <Icon icon="lucide:edit" style={{ fontSize: '24px' }} className="shrink-0 text-slate-800 hover:bg-slate-100 transition-colors" />
                         <span>แชทใหม่</span>
                     </button>
                 </div>
@@ -58,7 +57,7 @@ export function AppSidebar() {
                                         className="w-[297px] h-[54px] flex gap-3 text-slate-700 hover:text-slate-900 hover:bg-slate-100 whitespace-normal text-sm items-center rounded-xl px-4"
                                     >
                                         <a href={item.url}>
-                                            <item.icon className="w-5 h-5 shrink-0" />
+                                            <Icon icon="mdi:folder-open-outline" style={{ fontSize: '24px' }} className="shrink-0 text-slate-800 hover:bg-slate-100 transition-colors" />
                                             <span className="line-clamp-2 leading-snug">{item.title}</span>
                                         </a>
                                     </SidebarMenuButton>
