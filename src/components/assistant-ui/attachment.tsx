@@ -1,7 +1,8 @@
 "use client";
 
 import { PropsWithChildren, useEffect, useState, type FC } from "react";
-import { XIcon, PlusIcon, FileText } from "lucide-react";
+import { XIcon, FileText } from "lucide-react";
+import { Icon } from "@iconify/react";
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
@@ -150,7 +151,7 @@ const AttachmentUI: FC = () => {
         className={cn(
           "aui-attachment-root relative",
           isImage &&
-            "aui-attachment-root-composer only:[&>#attachment-tile]:size-24",
+          "aui-attachment-root-composer only:[&>#attachment-tile]:size-24",
         )}
       >
         <AttachmentPreviewDialog>
@@ -159,7 +160,7 @@ const AttachmentUI: FC = () => {
               className={cn(
                 "aui-attachment-tile size-14 cursor-pointer overflow-hidden rounded-[14px] border bg-muted transition-opacity hover:opacity-75",
                 isComposer &&
-                  "aui-attachment-tile-composer border-foreground/20",
+                "aui-attachment-tile-composer border-foreground/20",
               )}
               role="button"
               id="attachment-tile"
@@ -218,10 +219,10 @@ export const ComposerAddAttachment: FC = () => {
         side="bottom"
         variant="ghost"
         size="icon"
-        className="aui-composer-add-attachment size-8.5 rounded-full p-1 font-semibold text-xs hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30"
+        className="aui-composer-add-attachment size-10 rounded-full font-semibold text-xs text-white hover:bg-transparent [&_svg]:text-white hover:[&_svg]:opacity-80 transition-opacity"
         aria-label="Add Attachment"
       >
-        <PlusIcon className="aui-attachment-add-icon size-5 stroke-[1.5px]" />
+        <Icon icon="fluent:chat-20-filled" className="size-5 text-white" />
       </TooltipIconButton>
     </ComposerPrimitive.AddAttachment>
   );

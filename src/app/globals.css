@@ -45,6 +45,17 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+
+  /* Grey scale — mapping CSS vars so Tailwind generates text-grey, bg-grey-*, etc. */
+  --color-grey: var(--grey);
+  --color-grey-200: var(--grey-200);
+  --color-grey-300: var(--grey-300);
+  --color-grey-400: var(--grey-400);
+  --color-grey-500: var(--grey-500);
+  --color-grey-600: var(--grey-600);
+  --color-grey-700: var(--grey-700);
+  --color-grey-800: var(--grey-800);
+  --color-grey-900: var(--grey-900);
 }
 
 :root {
@@ -80,6 +91,16 @@
   --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
   --sidebar-border: oklch(0.92 0.004 286.32);
   --sidebar-ring: oklch(0.705 0.015 286.067);
+
+  --grey: #5A5A5A;
+  --grey-200: #E5E5E5;
+  --grey-300: #D9D9D9;
+  --grey-400: #C4C4C4;
+  --grey-500: #AFAFAF;
+  --grey-600: #9A9A9A;
+  --grey-700: #858585;
+  --grey-800: #707070;
+  --grey-900: #5A5A5A;
 }
 
 .dark {
@@ -120,7 +141,12 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "Roboto";
     @apply bg-background text-foreground;
   }
 }
