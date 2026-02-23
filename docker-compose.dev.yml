@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    image: giga-chatbot-dev
+    container_name: giga-chatbot-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+    networks:
+      - orbis_dev_network
+
+networks:
+  orbis_dev_network:
+    external: true

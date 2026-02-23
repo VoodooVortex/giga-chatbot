@@ -1,0 +1,19 @@
+services:
+  app:
+    build:
+      context: .
+      target: runner
+    image: giga-chatbot-prod
+    container_name: giga-chatbot-prod
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    networks:
+      - orbis_prod_network
+    restart: always
+
+networks:
+  orbis_prod_network:
+    external: true
