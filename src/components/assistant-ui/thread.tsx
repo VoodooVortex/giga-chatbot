@@ -219,17 +219,30 @@ const AssistantMessage: FC = () => {
       className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative mx-auto w-full max-w-(--thread-max-width) animate-in py-3 duration-150"
       data-role="assistant"
     >
-      <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
-        <MessagePrimitive.Parts
-          components={{
-            Text: MarkdownText,
-            tools: { Fallback: ToolFallback },
-          }}
+      {/* Avatar + Bubble row */}
+      <div className="flex items-start gap-3 px-2">
+        {/* Giga avatar */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/Giga.png"
+          alt="Giga"
+          className="w-10 h-10 object-contain shrink-0 mt-0.5"
         />
-        <MessageError />
+
+        {/* Message bubble */}
+        <div className="aui-assistant-message-content wrap-break-word bg-[#3A4354] text-white rounded-2xl rounded-tl-sm px-4 py-3 leading-relaxed text-[15px] max-w-[85%]">
+          <MessagePrimitive.Parts
+            components={{
+              Text: MarkdownText,
+              tools: { Fallback: ToolFallback },
+            }}
+          />
+          <MessageError />
+        </div>
       </div>
 
-      <div className="aui-assistant-message-footer mt-1 ml-2 flex">
+      {/* Action bar below bubble (offset to align under bubble) */}
+      <div className="aui-assistant-message-footer mt-1 ml-[52px] flex">
         <BranchPicker />
         <AssistantActionBar />
       </div>
@@ -295,7 +308,7 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content wrap-break-word rounded-2xl bg-muted px-4 py-2.5 text-foreground">
+        <div className="aui-user-message-content wrap-break-word rounded-2xl rounded-tr-sm bg-[#4BA6F5] px-4 py-2.5 text-white text-[15px]">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 pr-2">
