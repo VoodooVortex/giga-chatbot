@@ -83,11 +83,17 @@ async function makeRequest<T>(
 // ============================================================================
 
 export interface SessionResponse {
-    user: {
-        id: string;
+    message: string;
+    data: {
+        user: {
+            sub: number;
+            role: string;
+            dept?: number;
+            sec?: number;
+        };
         roles: string[];
+        exp: number;
     };
-    exp: number;
 }
 
 export async function getSession(cookie?: string): Promise<SessionResponse> {
@@ -95,7 +101,7 @@ export async function getSession(cookie?: string): Promise<SessionResponse> {
 }
 
 // ============================================================================
-// Devices API (Updated for Orbis-Track Schema)
+// Devices API (Updated to match contract: /api/v1/inventory)
 // ============================================================================
 
 export interface Device {
@@ -130,14 +136,14 @@ export interface DeviceChild {
     updated_at: string;
 }
 
-export interface DeviceStatus {
-    de_id: number;
+export interface DeviceChildStatus {
     total_childs: number;
     available_count: number;
     borrowed_count: number;
     repairing_count: number;
     damaged_count: number;
-    status_summary: string;
+    lost_count: number;
+    ready_count: number;
 }
 
 export interface Category {
@@ -153,9 +159,11 @@ export interface Section {
 
 export interface DevicesListResponse {
     data: Device[];
-    total: number;
-    page: number;
-    limit: number;
+    meta: {
+        total: number;
+        page: number;
+        limit: number;
+    };
 }
 
 export async function getDevices(
@@ -163,21 +171,19 @@ export async function getDevices(
         page?: number;
         limit?: number;
         search?: string;
-        status?: string;
-        ca_id?: number;
+        category?: number;
     },
     cookie?: string
 ): Promise<DevicesListResponse> {
     const queryParams = new URLSearchParams();
     if (params?.page) queryParams.set("page", params.page.toString());
     if (params?.limit) queryParams.set("limit", params.limit.toString());
-    if (params?.search) queryParams.set("q", params.search);
-    if (params?.status) queryParams.set("status", params.status);
-    if (params?.ca_id) queryParams.set("ca_id", params.ca_id.toString());
+    if (params?.search) queryParams.set("search", params.search);
+    if (params?.category) queryParams.set("category", params.category.toString());
 
     const query = queryParams.toString();
     return makeRequest<DevicesListResponse>(
-        `/api/devices${query ? `?${query}` : ""}`,
+        `/api/v1/inventory${query ? `?${query}` : ""}`,
         { cookie }
     );
 }
@@ -186,29 +192,21 @@ export async function getDevice(
     id: number,
     cookie?: string
 ): Promise<Device> {
-    return makeRequest<Device>(`/api/devices/${id}`, { cookie });
+    return makeRequest<Device>(`/api/v1/inventory/devices/${id}`, { cookie });
 }
 
-export async function getDeviceStatus(
-    id: number,
+export async function getDeviceChildStatus(
     cookie?: string
-): Promise<DeviceStatus> {
-    return makeRequest<DeviceStatus>(`/api/devices/${id}/status`, { cookie });
-}
-
-export async function getDeviceChilds(
-    deviceId: number,
-    cookie?: string
-): Promise<DeviceChild[]> {
-    return makeRequest<DeviceChild[]>(`/api/devices/${deviceId}/childs`, { cookie });
+): Promise<DeviceChildStatus> {
+    return makeRequest<DeviceChildStatus>("/api/v1/inventory/device-child-status", { cookie });
 }
 
 export async function getCategories(cookie?: string): Promise<Category[]> {
-    return makeRequest<Category[]>("/api/categories", { cookie });
+    return makeRequest<Category[]>("/api/v1/categories", { cookie });
 }
 
 // ============================================================================
-// Tickets API (Updated for Orbis-Track Schema)
+// Tickets API (Updated to match contract: /api/v1/tickets/borrow-return)
 // ============================================================================
 
 export interface BorrowReturnTicket {
@@ -243,9 +241,11 @@ export interface BorrowReturnTicket {
 
 export interface TicketsListResponse {
     data: BorrowReturnTicket[];
-    total: number;
-    page: number;
-    limit: number;
+    meta: {
+        total: number;
+        page: number;
+        limit: number;
+    };
 }
 
 export async function getBorrowReturnTickets(
@@ -269,7 +269,7 @@ export async function getBorrowReturnTickets(
 
     const query = queryParams.toString();
     return makeRequest<TicketsListResponse>(
-        `/api/tickets/borrow-return${query ? `?${query}` : ""}`,
+        `/api/v1/tickets/borrow-return${query ? `?${query}` : ""}`,
         { cookie }
     );
 }
@@ -278,13 +278,13 @@ export async function getBorrowReturnTicket(
     id: number,
     cookie?: string
 ): Promise<BorrowReturnTicket> {
-    return makeRequest<BorrowReturnTicket>(`/api/tickets/borrow-return/${id}`, {
+    return makeRequest<BorrowReturnTicket>(`/api/v1/tickets/borrow-return/${id}`, {
         cookie,
     });
 }
 
 // ============================================================================
-// Issues API (Updated for Orbis-Track Schema)
+// Issues API (Updated to match contract: /api/v1/history-issue)
 // ============================================================================
 
 export interface TicketIssue {
@@ -320,9 +320,11 @@ export interface TicketIssue {
 
 export interface IssuesListResponse {
     data: TicketIssue[];
-    total: number;
-    page: number;
-    limit: number;
+    meta: {
+        total: number;
+        page: number;
+        limit: number;
+    };
 }
 
 export async function getIssues(
@@ -346,7 +348,7 @@ export async function getIssues(
 
     const query = queryParams.toString();
     return makeRequest<IssuesListResponse>(
-        `/api/issues${query ? `?${query}` : ""}`,
+        `/api/v1/history-issue${query ? `?${query}` : ""}`,
         { cookie }
     );
 }
@@ -355,11 +357,11 @@ export async function getIssue(
     id: number,
     cookie?: string
 ): Promise<TicketIssue> {
-    return makeRequest<TicketIssue>(`/api/issues/${id}`, { cookie });
+    return makeRequest<TicketIssue>(`/api/v1/history-issue/${id}`, { cookie });
 }
 
 // ============================================================================
-// Notifications API (Updated for Orbis-Track Schema)
+// Notifications API (Updated to match contract)
 // ============================================================================
 
 export interface Notification {
@@ -380,26 +382,28 @@ export interface Notification {
 }
 
 export async function getNotifications(
-    params?: { unread?: boolean; limit?: number },
+    params?: { unread?: boolean; limit?: number; page?: number },
     cookie?: string
 ): Promise<Notification[]> {
     const queryParams = new URLSearchParams();
     if (params?.unread) queryParams.set("unread", "true");
     if (params?.limit) queryParams.set("limit", params.limit.toString());
+    if (params?.page) queryParams.set("page", params.page.toString());
 
     const query = queryParams.toString();
     return makeRequest<Notification[]>(
-        `/api/notifications${query ? `?${query}` : ""}`,
+        `/api/v1/notifications${query ? `?${query}` : ""}`,
         { cookie }
     );
 }
 
-export async function markNotificationAsRead(
-    id: number,
+export async function markNotificationsAsRead(
+    ids: number[],
     cookie?: string
 ): Promise<void> {
-    await makeRequest<void>(`/api/notifications/${id}/read`, {
-        method: "POST",
+    await makeRequest<void>("/api/v1/notifications/read", {
+        method: "PATCH",
+        body: { ids },
         cookie,
     });
 }
@@ -429,7 +433,7 @@ export interface ChatMessage {
 }
 
 export async function getChatRooms(cookie?: string): Promise<ChatRoom[]> {
-    return makeRequest<ChatRoom[]>("/api/chat/rooms", { cookie });
+    return makeRequest<ChatRoom[]>("/api/v1/chat/rooms", { cookie });
 }
 
 export async function getChatRoom(
@@ -437,7 +441,7 @@ export async function getChatRoom(
     cookie?: string
 ): Promise<ChatRoom & { messages: ChatMessage[] }> {
     return makeRequest<ChatRoom & { messages: ChatMessage[] }>(
-        `/api/chat/rooms/${roomId}`,
+        `/api/v1/chat/rooms/${roomId}`,
         { cookie }
     );
 }
@@ -446,7 +450,7 @@ export async function createChatRoom(
     title: string | null,
     cookie?: string
 ): Promise<ChatRoom> {
-    return makeRequest<ChatRoom>("/api/chat/rooms", {
+    return makeRequest<ChatRoom>("/api/v1/chat/rooms", {
         method: "POST",
         body: { title },
         cookie,
@@ -459,9 +463,34 @@ export async function createChatMessage(
     role: "user" | "assistant" | "system" | "tool" = "user",
     cookie?: string
 ): Promise<ChatMessage> {
-    return makeRequest<ChatMessage>(`/api/chat/rooms/${roomId}/messages`, {
+    return makeRequest<ChatMessage>(`/api/v1/chat/rooms/${roomId}/messages`, {
         method: "POST",
         body: { content, role },
         cookie,
     });
+}
+
+// ============================================================================
+// Health Check Endpoints
+// ============================================================================
+
+export interface HealthResponse {
+    status: string;
+    timestamp: string;
+}
+
+export interface ReadinessResponse {
+    status: string;
+    checks: {
+        database: string;
+    };
+    timestamp: string;
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+    return makeRequest<HealthResponse>("/api/healthz");
+}
+
+export async function getReadiness(): Promise<ReadinessResponse> {
+    return makeRequest<ReadinessResponse>("/api/readyz");
 }

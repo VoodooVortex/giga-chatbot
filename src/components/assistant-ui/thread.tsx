@@ -44,7 +44,10 @@ export const Thread: FC = () => {
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4"
-        style={{ background: 'radial-gradient(ellipse at 50% 45%, rgba(186,220,255,0.50) 0%, rgba(214,234,255,0.25) 45%, rgba(255,255,255,0) 80%)' }}
+        style={{
+          background:
+            "radial-gradient(ellipse at 50% 45%, rgba(186,220,255,0.50) 0%, rgba(214,234,255,0.25) 45%, rgba(255,255,255,0) 80%)",
+        }}
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
           <ThreadWelcome />
@@ -91,19 +94,29 @@ const ThreadWelcome: FC = () => {
             <div
               className="absolute rounded-full"
               style={{
-                width: '280px',
-                height: '280px',
-                background: 'radial-gradient(ellipse at center, rgba(186,220,255,0.7) 0%, rgba(186,220,255,0) 65%)'
+                width: "280px",
+                height: "280px",
+                background:
+                  "radial-gradient(ellipse at center, rgba(186,220,255,0.7) 0%, rgba(186,220,255,0) 65%)",
               }}
             />
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/Giga.png" alt="Giga" className="relative w-26 h-30 object-contain z-10" />
+            <img
+              src="/chat/Giga.png"
+              alt="Giga"
+              className="relative w-26 h-30 object-contain z-10"
+            />
           </div>
 
           <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-center text-[32px] md:text-[38px] tracking-tight duration-200 leading-snug">
             <span className="font-medium text-[#40A9FF]">How can </span>
             <span className="font-bold text-[#40A9FF]">Giga</span>
-            <span className="font-medium text-[#40A9FF]"> help you<br />today ?</span>
+            <span className="font-medium text-[#40A9FF]">
+              {" "}
+              help you
+              <br />
+              today ?
+            </span>
           </h1>
         </div>
       </div>
@@ -116,7 +129,7 @@ const ThreadSuggestions: FC = () => {
   const suggestions = [
     { text: "ตรวจสอบอุปกรณ์ที่ว่างใช้งาน" },
     { text: "ต้องการแจ้งปัญหาอุปกรณ์" },
-    { text: "อยากทราบรายละเอียดของอุปกรณ์" }
+    { text: "อยากทราบรายละเอียดของอุปกรณ์" },
   ];
 
   return (
@@ -144,7 +157,6 @@ const Composer: FC = () => {
 
       {/* Input pill */}
       <ComposerPrimitive.AttachmentDropzone className="aui-composer-attachment-dropzone flex flex-row items-center w-full h-[64px] rounded-full bg-[#F2F2F2] p-[8px] outline-none transition-shadow focus-within:ring-2 focus-within:ring-[#4BA6F5]/20 focus-within:bg-[#F8F8F8] shadow-[0_1px_8px_rgba(0,0,0,0.08)]">
-
         {/* Left: dark circle — 48×48 */}
         <div className="flex items-center shrink-0">
           <div className="w-[48px] h-[48px] rounded-full bg-[#3A4354] hover:bg-[#2C3342] flex items-center justify-center transition-colors">
@@ -182,7 +194,10 @@ const ComposerAction: FC = () => {
             className="w-[48px] h-[48px] rounded-full bg-[#4BA6F5] hover:bg-[#3B96F3] text-white shadow-sm flex items-center justify-center transition-transform hover:scale-105"
             aria-label="Send message"
           >
-            <Icon icon="heroicons-outline:arrow-up" className="w-7 h-7 stroke-[2.5]" />
+            <Icon
+              icon="heroicons-outline:arrow-up"
+              className="w-7 h-7 stroke-[2.5]"
+            />
           </Button>
         </ComposerPrimitive.Send>
       </AuiIf>
@@ -224,7 +239,7 @@ const AssistantMessage: FC = () => {
         {/* Giga avatar */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/Giga.png"
+          src="/chat/Giga.png"
           alt="Giga"
           className="w-10 h-10 object-contain shrink-0 mt-0.5"
         />
