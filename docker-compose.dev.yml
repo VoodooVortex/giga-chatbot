@@ -1,5 +1,5 @@
 services:
-  app:
+  chatbot:
     build:
       context: .
       target: dev
@@ -16,6 +16,31 @@ services:
       - PORT=3000
     networks:
       - orbis_dev_network
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    image: giga-chatbot-worker
+    container_name: giga-chatbot-worker
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      - CHUNK_SIZE=${CHUNK_SIZE:-512}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
+      - DEBOUNCE_MS=${DEBOUNCE_MS:-500}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-5}
+      - WORKER_RETRY_MAX=${WORKER_RETRY_MAX:-3}
+      - WORKER_RETRY_DELAY_MS=${WORKER_RETRY_DELAY_MS:-1000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks:
+      - orbis_prod_network
+    restart: always
+    depends_on:
+      chatbot:
+        condition: service_healthy
 
 networks:
   orbis_dev_network:

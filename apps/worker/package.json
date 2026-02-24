@@ -1,0 +1,24 @@
+{
+  "name": "giga-chatbot-worker",
+  "version": "1.0.0",
+  "description": "RAG Worker for Giga Chatbot - Handles embedding updates",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx src/test.ts"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "pg": "^8.18.0",
+    "zod": "^4.3.6",
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.16.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5"
+  }
+}

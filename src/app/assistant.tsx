@@ -27,10 +27,10 @@ export const Assistant = () => {
           <div className="flex items-center gap-2">
 
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/Giga.png" alt="Giga" className="w-10 h-13 object-contain shrink-0" />
+            <img src="/chat/Giga.png" alt="Giga" className="w-10 h-13 object-contain shrink-0" />
 
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/GigaChatBot.png" alt="GiGa ChatBot" className="w-19 h-13 object-contain shrink-0" />
+            <img src="/chat/GigaChatBot.png" alt="GiGa ChatBot" className="w-19 h-13 object-contain shrink-0" />
           </div>
         </header>
 
