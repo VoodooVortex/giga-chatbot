@@ -50,7 +50,10 @@ if (!parsed.success) {
     parsed.error.issues.forEach((issue) => {
         console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
     });
-    process.exit(1);
+    // Throw error instead of process.exit for Edge Runtime compatibility
+    throw new Error(
+        `Invalid environment variables: ${parsed.error.issues.map(i => i.path.join(".")).join(", ")}`
+    );
 }
 
 export const env = {
