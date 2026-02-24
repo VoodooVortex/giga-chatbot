@@ -5,82 +5,29 @@ import {
     text,
     timestamp,
     jsonb,
-    uuid,
-    index,
-    vector,
     integer,
+    vector,
+    index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { env } from "@/lib/config";
 
 // ============================================================================
-// Chat Schema
+// Chat Schema (References existing Orbis-Track tables)
+// NOTE: These are views/references to existing tables, not new tables
 // ============================================================================
 
-export const chatRooms = pgTable(
-    "chat_rooms",
-    {
-        crId: bigserial("cr_id", { mode: "number" }).primaryKey(),
-        crTitle: varchar("cr_title", { length: 255 }),
-        crUserId: uuid("cr_user_id").notNull(),
-        crStatus: varchar("cr_status", { length: 50 }).default("active").notNull(),
-        crCreatedAt: timestamp("cr_created_at", { withTimezone: true })
-            .default(sql`NOW()`)
-            .notNull(),
-        crUpdatedAt: timestamp("cr_updated_at", { withTimezone: true })
-            .default(sql`NOW()`)
-            .notNull(),
-    },
-    (table) => ({
-        userIdIdx: index("chat_rooms_user_id_idx").on(table.crUserId),
-        statusIdx: index("chat_rooms_status_idx").on(table.crStatus),
-        createdAtIdx: index("chat_rooms_created_at_idx").on(table.crCreatedAt),
-    })
-);
+// Existing in Orbis-Track: chat_rooms
+// cr_id, cr_us_id, cr_title, created_at, updated_at, last_msg_at
 
-export const chatMessages = pgTable(
-    "chat_messages",
-    {
-        cmId: bigserial("cm_id", { mode: "number" }).primaryKey(),
-        cmCrId: bigserial("cm_cr_id", { mode: "number" })
-            .references(() => chatRooms.crId, { onDelete: "cascade" })
-            .notNull(),
-        cmRole: varchar("cm_role", { length: 50 }).notNull(), // user, assistant, system, tool
-        cmContent: text("cm_content").notNull(),
-        cmToolCalls: jsonb("cm_tool_calls"), // Store tool call data
-        cmToolCallId: varchar("cm_tool_call_id", { length: 255 }), // For matching tool responses
-        cmCreatedAt: timestamp("cm_created_at", { withTimezone: true })
-            .default(sql`NOW()`)
-            .notNull(),
-    },
-    (table) => ({
-        roomIdIdx: index("chat_messages_room_id_idx").on(table.cmCrId),
-        createdAtIdx: index("chat_messages_created_at_idx").on(table.cmCreatedAt),
-    })
-);
+// Existing in Orbis-Track: chat_messages
+// cm_id, cm_role, cm_content, cm_content_json, cm_status, cm_parent_id, cm_cr_id, created_at
 
-export const chatAttachments = pgTable(
-    "chat_attachments",
-    {
-        caId: bigserial("ca_id", { mode: "number" }).primaryKey(),
-        caCmId: bigserial("ca_cm_id", { mode: "number" })
-            .references(() => chatMessages.cmId, { onDelete: "cascade" })
-            .notNull(),
-        caFilename: varchar("ca_filename", { length: 255 }).notNull(),
-        caMimeType: varchar("ca_mime_type", { length: 100 }).notNull(),
-        caFileSize: bigserial("ca_file_size", { mode: "number" }).notNull(),
-        caStoragePath: varchar("ca_storage_path", { length: 500 }).notNull(),
-        caCreatedAt: timestamp("ca_created_at", { withTimezone: true })
-            .default(sql`NOW()`)
-            .notNull(),
-    },
-    (table) => ({
-        messageIdIdx: index("chat_attachments_message_id_idx").on(table.caCmId),
-    })
-);
+// Existing in Orbis-Track: chat_attachments
+// catt_id, catt_cm_id, catt_file_path, created_at
 
 // ============================================================================
-// RAG Schema - Embeddings
+// RAG Schema - Embeddings (New table for giga-chatbot)
 // ============================================================================
 
 export const embeddings = pgTable(
@@ -119,14 +66,117 @@ export const embeddings = pgTable(
 // Types
 // ============================================================================
 
-export type ChatRoom = typeof chatRooms.$inferSelect;
-export type NewChatRoom = typeof chatRooms.$inferInsert;
-
-export type ChatMessage = typeof chatMessages.$inferSelect;
-export type NewChatMessage = typeof chatMessages.$inferInsert;
-
-export type ChatAttachment = typeof chatAttachments.$inferSelect;
-export type NewChatAttachment = typeof chatAttachments.$inferInsert;
-
 export type Embedding = typeof embeddings.$inferSelect;
 export type NewEmbedding = typeof embeddings.$inferInsert;
+
+// ============================================================================
+// Interfaces for existing Orbis-Track tables (for type safety)
+// ============================================================================
+
+export interface ChatRoom {
+    cr_id: number;
+    cr_us_id: number;
+    cr_title: string | null;
+    created_at: Date;
+    updated_at: Date | null;
+    last_msg_at: Date | null;
+}
+
+export interface ChatMessage {
+    cm_id: number;
+    cm_role: "user" | "assistant" | "system" | "tool";
+    cm_content: string;
+    cm_content_json: unknown | null;
+    cm_status: "ok" | "error" | "blocked";
+    cm_parent_id: number | null;
+    cm_cr_id: number;
+    created_at: Date;
+}
+
+export interface ChatAttachment {
+    catt_id: number;
+    catt_cm_id: number;
+    catt_file_path: string;
+    created_at: Date;
+}
+
+// Orbis-Track Business Types for RAG
+export interface Device {
+    de_id: number;
+    de_serial_number: string;
+    de_name: string;
+    de_description: string | null;
+    de_location: string;
+    de_max_borrow_days: number;
+    de_images: string | null;
+    de_af_id: number;
+    de_ca_id: number;
+    de_us_id: number;
+    de_sec_id: number;
+    deleted_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface DeviceChild {
+    dec_id: number;
+    dec_serial_number: string | null;
+    dec_asset_code: string;
+    dec_has_serial_number: boolean;
+    dec_status: "UNAVAILABLE" | "READY" | "BORROWED" | "REPAIRING" | "DAMAGED" | "LOST";
+    dec_de_id: number;
+    deleted_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface Category {
+    ca_id: number;
+    ca_name: string;
+    deleted_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface BorrowReturnTicket {
+    brt_id: number;
+    brt_status: "PENDING" | "APPROVED" | "IN_USE" | "OVERDUE" | "COMPLETED" | "REJECTED";
+    brt_user: string;
+    brt_phone: string;
+    brt_usage_location: string;
+    brt_borrow_purpose: string;
+    brt_start_date: Date;
+    brt_end_date: Date;
+    brt_quantity: number;
+    brt_current_stage: number | null;
+    brt_reject_reason: string | null;
+    brt_pickup_location: string | null;
+    brt_pickup_datetime: Date | null;
+    brt_return_location: string | null;
+    brt_return_datetime: Date | null;
+    brt_af_id: number | null;
+    brt_user_id: number;
+    brt_staff_id: number | null;
+    deleted_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}
+
+export interface TicketIssue {
+    ti_id: number;
+    ti_de_id: number;
+    ti_brt_id: number | null;
+    ti_title: string;
+    ti_description: string;
+    ti_reported_by: number;
+    ti_assigned_to: number | null;
+    ti_status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+    ti_result: "SUCCESS" | "FAILED" | "IN_PROGRESS";
+    ti_damaged_reason: string | null;
+    ti_resolved_note: string | null;
+    receive_at: Date | null;
+    success_at: Date | null;
+    deleted_at: Date | null;
+    created_at: Date;
+    updated_at: Date;
+}

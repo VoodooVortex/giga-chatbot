@@ -1,80 +1,29 @@
 -- ============================================================================
 -- Chat Schema Migration
+-- NOTE: chat_rooms and chat_messages already exist in main Orbis-Track schema
+-- This migration adds any missing indexes or extensions needed for chatbot
 -- ============================================================================
-
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Create chat schema
-CREATE SCHEMA IF NOT EXISTS chat;
+-- Note: The following tables already exist in Orbis-Track main schema:
+-- - chat_rooms (cr_id, cr_us_id, cr_title, created_at, updated_at, last_msg_at)
+-- - chat_messages (cm_id, cm_role, cm_content, cm_content_json, cm_status, cm_parent_id, cm_cr_id, created_at)
+-- - chat_attachments (catt_id, catt_cm_id, catt_file_path, created_at)
+-- Add any missing indexes for performance
+CREATE INDEX IF NOT EXISTS idx_chat_messages_cr_id_created_at ON chat_messages (cm_cr_id, created_at);
 
--- Chat Rooms Table
-CREATE TABLE chat.chat_rooms (
-    cr_id BIGSERIAL PRIMARY KEY,
-    cr_title VARCHAR(255),
-    cr_user_id UUID NOT NULL,
-    cr_status VARCHAR(50) DEFAULT 'active' NOT NULL,
-    cr_created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    cr_updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages (cm_role);
 
--- Indexes for chat_rooms
-CREATE INDEX chat_rooms_user_id_idx ON chat.chat_rooms(cr_user_id);
-CREATE INDEX chat_rooms_status_idx ON chat.chat_rooms(cr_status);
-CREATE INDEX chat_rooms_created_at_idx ON chat.chat_rooms(cr_created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_cm_id ON chat_attachments (catt_cm_id);
 
--- Chat Messages Table
-CREATE TABLE chat.chat_messages (
-    cm_id BIGSERIAL PRIMARY KEY,
-    cm_cr_id BIGINT NOT NULL REFERENCES chat.chat_rooms(cr_id) ON DELETE CASCADE,
-    cm_role VARCHAR(50) NOT NULL CHECK (cm_role IN ('user', 'assistant', 'system', 'tool')),
-    cm_content TEXT NOT NULL,
-    cm_tool_calls JSONB,
-    cm_tool_call_id VARCHAR(255),
-    cm_created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
--- Indexes for chat_messages
-CREATE INDEX chat_messages_room_id_idx ON chat.chat_messages(cm_cr_id);
-CREATE INDEX chat_messages_created_at_idx ON chat.chat_messages(cm_created_at);
-
--- Chat Attachments Table
-CREATE TABLE chat.chat_attachments (
-    ca_id BIGSERIAL PRIMARY KEY,
-    ca_cm_id BIGINT NOT NULL REFERENCES chat.chat_messages(cm_id) ON DELETE CASCADE,
-    ca_filename VARCHAR(255) NOT NULL,
-    ca_mime_type VARCHAR(100) NOT NULL,
-    ca_file_size BIGINT NOT NULL,
-    ca_storage_path VARCHAR(500) NOT NULL,
-    ca_created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
--- Index for chat_attachments
-CREATE INDEX chat_attachments_message_id_idx ON chat.chat_attachments(ca_cm_id);
-
--- Update trigger for cr_updated_at
-CREATE OR REPLACE FUNCTION chat.update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.cr_updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-CREATE TRIGGER update_chat_rooms_updated_at
-    BEFORE UPDATE ON chat.chat_rooms
-    FOR EACH ROW
-    EXECUTE FUNCTION chat.update_updated_at_column();
-
+-- Add index for vector search metadata if needed
+-- CREATE INDEX IF NOT EXISTS idx_chat_messages_embedding ON chat_messages USING gin(cm_content_json);
 -- ============================================================================
 -- Comments
 -- ============================================================================
+COMMENT ON TABLE chat_rooms IS 'Chat conversation rooms (managed by Orbis-Track)';
 
-COMMENT ON TABLE chat.chat_rooms IS 'Chat conversation rooms';
-COMMENT ON TABLE chat.chat_messages IS 'Individual messages within chat rooms';
-COMMENT ON TABLE chat.chat_attachments IS 'File attachments for chat messages';
+COMMENT ON TABLE chat_messages IS 'Individual messages within chat rooms (managed by Orbis-Track)';
 
-COMMENT ON COLUMN chat.chat_rooms.cr_status IS 'Room status: active, archived, deleted';
-COMMENT ON COLUMN chat.chat_messages.cm_role IS 'Message role: user, assistant, system, or tool';
-COMMENT ON COLUMN chat.chat_messages.cm_tool_calls IS 'JSON array of tool calls made by assistant';
-COMMENT ON COLUMN chat.chat_messages.cm_tool_call_id IS 'ID for matching tool responses to tool calls';
+COMMENT ON TABLE chat_attachments IS 'File attachments for chat messages (managed by Orbis-Track)';

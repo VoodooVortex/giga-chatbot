@@ -1,5 +1,5 @@
 -- ============================================================================
--- RAG Schema Migration
+-- RAG Schema Migration (Updated for Orbis-Track)
 -- ============================================================================
 
 -- Enable pgvector extension
@@ -44,37 +44,67 @@ CREATE OR REPLACE FUNCTION public.notify_rag_update()
 RETURNS TRIGGER AS $$
 DECLARE
     payload JSON;
-    pk_column TEXT;
     pk_value TEXT;
+    relevant_columns TEXT[];
+    should_notify BOOLEAN := false;
+    col_name TEXT;
 BEGIN
-    -- Determine the primary key column name
-    -- This handles different table structures
+    -- Define relevant columns for each table
     IF TG_TABLE_NAME = 'devices' THEN
-        pk_column := 'de_id';
+        relevant_columns := ARRAY['de_name', 'de_description', 'de_location', 'de_serial_number', 'de_max_borrow_days'];
+        pk_value := NEW.de_id::text;
     ELSIF TG_TABLE_NAME = 'device_childs' THEN
-        pk_column := 'dec_id';
+        relevant_columns := ARRAY['dec_asset_code', 'dec_serial_number', 'dec_status', 'dec_has_serial_number'];
+        pk_value := NEW.dec_id::text;
     ELSIF TG_TABLE_NAME = 'categories' THEN
-        pk_column := 'ca_id';
+        relevant_columns := ARRAY['ca_name'];
+        pk_value := NEW.ca_id::text;
     ELSIF TG_TABLE_NAME = 'borrow_return_tickets' THEN
-        pk_column := 'brt_id';
+        relevant_columns := ARRAY['brt_status', 'brt_user', 'brt_usage_location', 'brt_borrow_purpose', 
+                                   'brt_start_date', 'brt_end_date', 'brt_reject_reason'];
+        pk_value := NEW.brt_id::text;
     ELSIF TG_TABLE_NAME = 'ticket_issues' THEN
-        pk_column := 'ti_id';
+        relevant_columns := ARRAY['ti_title', 'ti_description', 'ti_status', 'ti_result', 
+                                   'ti_damaged_reason', 'ti_resolved_note'];
+        pk_value := NEW.ti_id::text;
     ELSE
-        pk_column := 'id';
+        -- Default: notify on any change
+        relevant_columns := ARRAY['*'];
+        pk_value := 'unknown';
     END IF;
     
-    -- Get primary key value
-    EXECUTE format('SELECT ($1).%I::text', pk_column) INTO pk_value USING NEW;
+    -- For INSERT, always notify
+    IF TG_OP = 'INSERT' THEN
+        should_notify := true;
+    -- For UPDATE, check if relevant columns changed
+    ELSIF TG_OP = 'UPDATE' THEN
+        FOREACH col_name IN ARRAY relevant_columns
+        LOOP
+            -- Check if column exists in the record and has changed
+            IF EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = TG_TABLE_NAME 
+                       AND column_name = col_name
+                       AND table_schema = TG_TABLE_SCHEMA) THEN
+                IF OLD IS DISTINCT FROM NEW THEN
+                    -- Simplified check: if any column changed, notify
+                    -- More precise check can be added if needed
+                    should_notify := true;
+                    EXIT;
+                END IF;
+            END IF;
+        END LOOP;
+    END IF;
     
-    -- Build payload
-    payload := json_build_object(
-        'table', TG_TABLE_NAME,
-        'pk', pk_value,
-        'action', TG_OP
-    );
-    
-    -- Send notification
-    PERFORM pg_notify('rag_update', payload::text);
+    -- Send notification if relevant
+    IF should_notify THEN
+        payload := json_build_object(
+            'table', TG_TABLE_NAME,
+            'pk', pk_value,
+            'action', TG_OP,
+            'timestamp', extract(epoch from now())
+        );
+        PERFORM pg_notify('rag_update', payload::text);
+    END IF;
     
     RETURN NEW;
 END;
@@ -85,32 +115,29 @@ CREATE OR REPLACE FUNCTION public.notify_rag_update_delete()
 RETURNS TRIGGER AS $$
 DECLARE
     payload JSON;
-    pk_column TEXT;
     pk_value TEXT;
 BEGIN
-    -- Determine the primary key column name
-    IF TG_TABLE_NAME = 'devices' THEN
-        pk_column := 'de_id';
-    ELSIF TG_TABLE_NAME = 'device_childs' THEN
-        pk_column := 'dec_id';
-    ELSIF TG_TABLE_NAME = 'categories' THEN
-        pk_column := 'ca_id';
-    ELSIF TG_TABLE_NAME = 'borrow_return_tickets' THEN
-        pk_column := 'brt_id';
-    ELSIF TG_TABLE_NAME = 'ticket_issues' THEN
-        pk_column := 'ti_id';
-    ELSE
-        pk_column := 'id';
-    END IF;
-    
     -- Get primary key value from OLD record
-    EXECUTE format('SELECT ($1).%I::text', pk_column) INTO pk_value USING OLD;
+    IF TG_TABLE_NAME = 'devices' THEN
+        pk_value := OLD.de_id::text;
+    ELSIF TG_TABLE_NAME = 'device_childs' THEN
+        pk_value := OLD.dec_id::text;
+    ELSIF TG_TABLE_NAME = 'categories' THEN
+        pk_value := OLD.ca_id::text;
+    ELSIF TG_TABLE_NAME = 'borrow_return_tickets' THEN
+        pk_value := OLD.brt_id::text;
+    ELSIF TG_TABLE_NAME = 'ticket_issues' THEN
+        pk_value := OLD.ti_id::text;
+    ELSE
+        pk_value := 'unknown';
+    END IF;
     
     -- Build payload
     payload := json_build_object(
         'table', TG_TABLE_NAME,
         'pk', pk_value,
-        'action', 'DELETE'
+        'action', 'DELETE',
+        'timestamp', extract(epoch from now())
     );
     
     -- Send notification

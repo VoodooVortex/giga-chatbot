@@ -95,24 +95,60 @@ export async function getSession(cookie?: string): Promise<SessionResponse> {
 }
 
 // ============================================================================
-// Devices API
+// Devices API (Updated for Orbis-Track Schema)
 // ============================================================================
 
 export interface Device {
     de_id: number;
+    de_serial_number: string;
     de_name: string;
-    de_description?: string;
-    de_location?: string;
-    de_ca_id?: number;
-    de_status?: string;
-    // Add other device fields as needed
+    de_description: string | null;
+    de_location: string;
+    de_max_borrow_days: number;
+    de_images: string | null;
+    de_af_id: number;
+    de_ca_id: number;
+    de_us_id: number;
+    de_sec_id: number;
+    deleted_at: string | null;
+    created_at: string;
+    updated_at: string;
+    // Relations (populated by API)
+    category?: Category;
+    section?: Section;
+}
+
+export interface DeviceChild {
+    dec_id: number;
+    dec_serial_number: string | null;
+    dec_asset_code: string;
+    dec_has_serial_number: boolean;
+    dec_status: "UNAVAILABLE" | "READY" | "BORROWED" | "REPAIRING" | "DAMAGED" | "LOST";
+    dec_de_id: number;
+    deleted_at: string | null;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface DeviceStatus {
     de_id: number;
-    status: string;
-    child_count: number;
+    total_childs: number;
     available_count: number;
+    borrowed_count: number;
+    repairing_count: number;
+    damaged_count: number;
+    status_summary: string;
+}
+
+export interface Category {
+    ca_id: number;
+    ca_name: string;
+}
+
+export interface Section {
+    sec_id: number;
+    sec_name: string;
+    sec_dept_id: number;
 }
 
 export interface DevicesListResponse {
@@ -128,6 +164,7 @@ export async function getDevices(
         limit?: number;
         search?: string;
         status?: string;
+        ca_id?: number;
     },
     cookie?: string
 ): Promise<DevicesListResponse> {
@@ -136,6 +173,7 @@ export async function getDevices(
     if (params?.limit) queryParams.set("limit", params.limit.toString());
     if (params?.search) queryParams.set("q", params.search);
     if (params?.status) queryParams.set("status", params.status);
+    if (params?.ca_id) queryParams.set("ca_id", params.ca_id.toString());
 
     const query = queryParams.toString();
     return makeRequest<DevicesListResponse>(
@@ -158,37 +196,74 @@ export async function getDeviceStatus(
     return makeRequest<DeviceStatus>(`/api/devices/${id}/status`, { cookie });
 }
 
+export async function getDeviceChilds(
+    deviceId: number,
+    cookie?: string
+): Promise<DeviceChild[]> {
+    return makeRequest<DeviceChild[]>(`/api/devices/${deviceId}/childs`, { cookie });
+}
+
+export async function getCategories(cookie?: string): Promise<Category[]> {
+    return makeRequest<Category[]>("/api/categories", { cookie });
+}
+
 // ============================================================================
-// Tickets API
+// Tickets API (Updated for Orbis-Track Schema)
 // ============================================================================
 
 export interface BorrowReturnTicket {
     brt_id: number;
-    brt_status: string;
-    brt_user_id: string;
-    brt_start_date?: string;
-    brt_end_date?: string;
-    brt_af_id?: number;
-    // Add other fields as needed
+    brt_status: "PENDING" | "APPROVED" | "IN_USE" | "OVERDUE" | "COMPLETED" | "REJECTED";
+    brt_user: string;
+    brt_phone: string;
+    brt_usage_location: string;
+    brt_borrow_purpose: string;
+    brt_start_date: string;
+    brt_end_date: string;
+    brt_quantity: number;
+    brt_current_stage: number | null;
+    brt_reject_reason: string | null;
+    brt_pickup_location: string | null;
+    brt_pickup_datetime: string | null;
+    brt_return_location: string | null;
+    brt_return_datetime: string | null;
+    brt_af_id: number | null;
+    brt_user_id: number;
+    brt_staff_id: number | null;
+    deleted_at: string | null;
+    created_at: string;
+    updated_at: string;
+    // Relations
+    requester?: {
+        us_id: number;
+        us_firstname: string;
+        us_lastname: string;
+    };
 }
 
 export interface TicketsListResponse {
     data: BorrowReturnTicket[];
     total: number;
+    page: number;
+    limit: number;
 }
 
 export async function getBorrowReturnTickets(
     params?: {
-        status?: string;
-        user_id?: string;
+        page?: number;
+        limit?: number;
+        status?: "PENDING" | "APPROVED" | "IN_USE" | "OVERDUE" | "COMPLETED" | "REJECTED";
+        user_id?: number;
         date_from?: string;
         date_to?: string;
     },
     cookie?: string
 ): Promise<TicketsListResponse> {
     const queryParams = new URLSearchParams();
+    if (params?.page) queryParams.set("page", params.page.toString());
+    if (params?.limit) queryParams.set("limit", params.limit.toString());
     if (params?.status) queryParams.set("status", params.status);
-    if (params?.user_id) queryParams.set("user_id", params.user_id);
+    if (params?.user_id) queryParams.set("user_id", params.user_id.toString());
     if (params?.date_from) queryParams.set("date_from", params.date_from);
     if (params?.date_to) queryParams.set("date_to", params.date_to);
 
@@ -209,29 +284,52 @@ export async function getBorrowReturnTicket(
 }
 
 // ============================================================================
-// Issues API
+// Issues API (Updated for Orbis-Track Schema)
 // ============================================================================
 
 export interface TicketIssue {
     ti_id: number;
+    ti_de_id: number;
+    ti_brt_id: number | null;
     ti_title: string;
-    ti_description?: string;
-    ti_status: string;
-    ti_result?: string;
-    ti_resolved_note?: string;
-    ti_de_id?: number;
-    ti_brt_id?: number;
-    // Add other fields as needed
+    ti_description: string;
+    ti_reported_by: number;
+    ti_assigned_to: number | null;
+    ti_status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+    ti_result: "SUCCESS" | "FAILED" | "IN_PROGRESS";
+    ti_damaged_reason: string | null;
+    ti_resolved_note: string | null;
+    receive_at: string | null;
+    success_at: string | null;
+    deleted_at: string | null;
+    created_at: string;
+    updated_at: string;
+    // Relations
+    device?: Device;
+    reporter?: {
+        us_id: number;
+        us_firstname: string;
+        us_lastname: string;
+    };
+    assignee?: {
+        us_id: number;
+        us_firstname: string;
+        us_lastname: string;
+    };
 }
 
 export interface IssuesListResponse {
     data: TicketIssue[];
     total: number;
+    page: number;
+    limit: number;
 }
 
 export async function getIssues(
     params?: {
-        status?: string;
+        page?: number;
+        limit?: number;
+        status?: "PENDING" | "IN_PROGRESS" | "COMPLETED";
         de_id?: number;
         brt_id?: number;
         q?: string;
@@ -239,6 +337,8 @@ export async function getIssues(
     cookie?: string
 ): Promise<IssuesListResponse> {
     const queryParams = new URLSearchParams();
+    if (params?.page) queryParams.set("page", params.page.toString());
+    if (params?.limit) queryParams.set("limit", params.limit.toString());
     if (params?.status) queryParams.set("status", params.status);
     if (params?.de_id) queryParams.set("de_id", params.de_id.toString());
     if (params?.brt_id) queryParams.set("brt_id", params.brt_id.toString());
@@ -259,23 +359,33 @@ export async function getIssue(
 }
 
 // ============================================================================
-// Notifications API
+// Notifications API (Updated for Orbis-Track Schema)
 // ============================================================================
 
 export interface Notification {
-    id: number;
-    title: string;
-    message: string;
-    read: boolean;
+    n_id: number;
+    n_title: string;
+    n_message: string;
+    n_data: unknown | null;
+    n_target_route: string | null;
+    n_base_event: string | null;
+    n_brt_id: number | null;
+    n_brts_id: number | null;
+    n_ti_id: number | null;
     created_at: string;
+    send_at: string | null;
+    // Recipient info
+    nr_status?: "UNREAD" | "READ" | "DISMISSED";
+    read_at?: string | null;
 }
 
 export async function getNotifications(
-    params?: { unread?: boolean },
+    params?: { unread?: boolean; limit?: number },
     cookie?: string
 ): Promise<Notification[]> {
     const queryParams = new URLSearchParams();
     if (params?.unread) queryParams.set("unread", "true");
+    if (params?.limit) queryParams.set("limit", params.limit.toString());
 
     const query = queryParams.toString();
     return makeRequest<Notification[]>(
@@ -290,6 +400,68 @@ export async function markNotificationAsRead(
 ): Promise<void> {
     await makeRequest<void>(`/api/notifications/${id}/read`, {
         method: "POST",
+        cookie,
+    });
+}
+
+// ============================================================================
+// Chat API (Existing Orbis-Track Chat)
+// ============================================================================
+
+export interface ChatRoom {
+    cr_id: number;
+    cr_us_id: number;
+    cr_title: string | null;
+    created_at: string;
+    updated_at: string | null;
+    last_msg_at: string | null;
+}
+
+export interface ChatMessage {
+    cm_id: number;
+    cm_role: "user" | "assistant" | "system" | "tool";
+    cm_content: string;
+    cm_content_json: unknown | null;
+    cm_status: "ok" | "error" | "blocked";
+    cm_parent_id: number | null;
+    cm_cr_id: number;
+    created_at: string;
+}
+
+export async function getChatRooms(cookie?: string): Promise<ChatRoom[]> {
+    return makeRequest<ChatRoom[]>("/api/chat/rooms", { cookie });
+}
+
+export async function getChatRoom(
+    roomId: number,
+    cookie?: string
+): Promise<ChatRoom & { messages: ChatMessage[] }> {
+    return makeRequest<ChatRoom & { messages: ChatMessage[] }>(
+        `/api/chat/rooms/${roomId}`,
+        { cookie }
+    );
+}
+
+export async function createChatRoom(
+    title: string | null,
+    cookie?: string
+): Promise<ChatRoom> {
+    return makeRequest<ChatRoom>("/api/chat/rooms", {
+        method: "POST",
+        body: { title },
+        cookie,
+    });
+}
+
+export async function createChatMessage(
+    roomId: number,
+    content: string,
+    role: "user" | "assistant" | "system" | "tool" = "user",
+    cookie?: string
+): Promise<ChatMessage> {
+    return makeRequest<ChatMessage>(`/api/chat/rooms/${roomId}/messages`, {
+        method: "POST",
+        body: { content, role },
         cookie,
     });
 }

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Create RAG Triggers on Business Tables
+-- Create RAG Triggers on Business Tables (Updated for Orbis-Track Schema)
 -- ============================================================================
 
 -- Note: These triggers assume the tables exist in the public schema
