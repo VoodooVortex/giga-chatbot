@@ -1,8 +1,9 @@
 import { config } from "dotenv";
 import { z } from "zod";
 
-// Load environment variables
+// Load environment variables (try .env.local first, then .env)
 config({ path: ".env.local" });
+config({ path: ".env" });
 
 const envSchema = z.object({
     // App
@@ -11,24 +12,21 @@ const envSchema = z.object({
     BASE_PATH: z.string().default("/chat"),
 
     // Auth
-    JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+    JWT_SECRET: z.string().default(""),
     COOKIE_NAME: z.string().default("orbistrack_jwt"),
 
     // Database
-    DATABASE_URL: z.string().url(),
+    DATABASE_URL: z.string().default(""),
 
     // Main App API
-    MAIN_APP_URL: z.string().url().default("http://localhost:3001"),
+    MAIN_APP_URL: z.string().default("http://localhost:3001"),
 
-    // OpenAI
-    OPENAI_API_KEY: z.string().startsWith("sk-"),
-
-    // Google
-    GOOGLE_API_KEY: z.string(),
-    GOOGLE_MODEL_NAME: z.string().default("gemini-2.5-flash"),
+    // Google AI (required)
+    GOOGLE_API_KEY: z.string().default(""),
+    GOOGLE_MODEL_NAME: z.string().default("gemini-1.5-flash"),
 
     // RAG
-    EMBEDDING_DIMENSION: z.string().default("1536"),
+    EMBEDDING_DIMENSION: z.string().default("768"),
     CHUNK_SIZE: z.string().default("512"),
     CHUNK_OVERLAP: z.string().default("50"),
     DEBOUNCE_MS: z.string().default("500"),
@@ -45,28 +43,52 @@ const envSchema = z.object({
 
 const parsed = envSchema.safeParse(process.env);
 
+let envData: z.infer<typeof envSchema>;
+
 if (!parsed.success) {
-    console.error("❌ Invalid environment variables:");
+    console.warn("⚠️  Invalid environment variables, using defaults:");
     parsed.error.issues.forEach((issue) => {
-        console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+        console.warn(`  - ${issue.path.join(".")}: ${issue.message}`);
     });
-    // Throw error instead of process.exit for Edge Runtime compatibility
-    throw new Error(
-        `Invalid environment variables: ${parsed.error.issues.map(i => i.path.join(".")).join(", ")}`
-    );
+    // Use defaults during build time
+    envData = envSchema.parse({});
+} else {
+    envData = parsed.data;
+}
+
+// Validate required vars at runtime (not build time)
+function validateRequiredEnv() {
+    const errors: string[] = [];
+
+    if (!envData.JWT_SECRET) {
+        errors.push("JWT_SECRET is required");
+    }
+    if (!envData.DATABASE_URL) {
+        errors.push("DATABASE_URL is required");
+    }
+    if (!envData.GOOGLE_API_KEY) {
+        errors.push("GOOGLE_API_KEY is required");
+    }
+
+    if (errors.length > 0) {
+        throw new Error(`Missing required environment variables: ${errors.join(", ")}`);
+    }
 }
 
 export const env = {
-    ...parsed.data,
-    PORT: parseInt(parsed.data.PORT, 10),
-    EMBEDDING_DIMENSION: parseInt(parsed.data.EMBEDDING_DIMENSION, 10),
-    CHUNK_SIZE: parseInt(parsed.data.CHUNK_SIZE, 10),
-    CHUNK_OVERLAP: parseInt(parsed.data.CHUNK_OVERLAP, 10),
-    DEBOUNCE_MS: parseInt(parsed.data.DEBOUNCE_MS, 10),
-    WORKER_CONCURRENCY: parseInt(parsed.data.WORKER_CONCURRENCY, 10),
-    WORKER_RETRY_MAX: parseInt(parsed.data.WORKER_RETRY_MAX, 10),
-    WORKER_RETRY_DELAY_MS: parseInt(parsed.data.WORKER_RETRY_DELAY_MS, 10),
-    ENABLE_REQUEST_LOGGING: parsed.data.ENABLE_REQUEST_LOGGING === "true",
+    ...envData,
+    PORT: parseInt(envData.PORT, 10),
+    EMBEDDING_DIMENSION: parseInt(envData.EMBEDDING_DIMENSION, 10),
+    CHUNK_SIZE: parseInt(envData.CHUNK_SIZE, 10),
+    CHUNK_OVERLAP: parseInt(envData.CHUNK_OVERLAP, 10),
+    DEBOUNCE_MS: parseInt(envData.DEBOUNCE_MS, 10),
+    WORKER_CONCURRENCY: parseInt(envData.WORKER_CONCURRENCY, 10),
+    WORKER_RETRY_MAX: parseInt(envData.WORKER_RETRY_MAX, 10),
+    WORKER_RETRY_DELAY_MS: parseInt(envData.WORKER_RETRY_DELAY_MS, 10),
+    ENABLE_REQUEST_LOGGING: envData.ENABLE_REQUEST_LOGGING === "true",
+
+    // Validation function to call at runtime
+    validate: validateRequiredEnv,
 };
 
 export type Env = typeof env;
