@@ -12,7 +12,13 @@ WORKDIR /app
 # Install dependencies stage
 FROM base AS deps
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
+
+# Build stage
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN pnpm run build
 
 # Production stage
 FROM base AS runner
@@ -22,14 +28,10 @@ ENV NODE_ENV=production
 # Create app directory
 WORKDIR /app
 
-# Copy dependencies
+# Copy dependencies and build output
 COPY --from=deps /app/node_modules ./node_modules
-
-# Copy source code
-COPY . .
-
-# Build TypeScript
-RUN pnpm run build
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs

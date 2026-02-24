@@ -3,23 +3,36 @@ services:
     build:
       context: .
       target: runner
-    image: giga-chatbot-prod
-    container_name: giga-chatbot-prod
+    image: giga-chatbot:latest
+    container_name: giga-chatbot
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
       - DATABASE_URL=${DATABASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - JWT_SECRET=${JWT_SECRET}
-      - MAIN_APP_URL=${MAIN_APP_URL}
+      - JWT_ISSUER=${JWT_ISSUER:-orbis-track}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-giga-chatbot}
+      - MAIN_APP_URL=${MAIN_APP_URL:-http://localhost:3001}
+      - COOKIE_NAME=${COOKIE_NAME:-token}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
     networks:
       - orbis_prod_network
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/chat/api/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "--spider",
+          "http://localhost:3000/chat/api/healthz",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -29,19 +42,19 @@ services:
     build:
       context: ./apps/worker
       dockerfile: Dockerfile
-    image: giga-chatbot-worker
+    image: giga-chatbot-worker:latest
     container_name: giga-chatbot-worker
     environment:
       - NODE_ENV=production
       - DATABASE_URL=${DATABASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}
       - DEBOUNCE_MS=${DEBOUNCE_MS:-500}
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-5}
-      - WORKER_RETRY_MAX=${WORKER_RETRY_MAX:-3}
-      - WORKER_RETRY_DELAY_MS=${WORKER_RETRY_DELAY_MS:-1000}
+      - WORKER_MAX_RETRIES=${WORKER_MAX_RETRIES:-3}
+      - WORKER_RETRY_DELAY_MS=${WORKER_RETRY_DELAY_MS:-5000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks:
       - orbis_prod_network
@@ -49,6 +62,11 @@ services:
     depends_on:
       chatbot:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
 
 networks:
   orbis_prod_network:

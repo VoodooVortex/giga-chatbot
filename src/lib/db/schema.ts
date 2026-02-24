@@ -14,17 +14,38 @@ import { env } from "@/lib/config";
 
 // ============================================================================
 // Chat Schema (References existing Orbis-Track tables)
-// NOTE: These are views/references to existing tables, not new tables
+// NOTE: These reference existing tables in Orbis-Track database
 // ============================================================================
 
-// Existing in Orbis-Track: chat_rooms
-// cr_id, cr_us_id, cr_title, created_at, updated_at, last_msg_at
+// Chat Rooms Table (existing in Orbis-Track)
+export const chatRooms = pgTable("chat_rooms", {
+    cr_id: bigserial("cr_id", { mode: "number" }).primaryKey(),
+    cr_us_id: integer("cr_us_id").notNull(),
+    cr_title: varchar("cr_title", { length: 255 }),
+    created_at: timestamp("created_at", { withTimezone: true }).default(sql`NOW()`).notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }),
+    last_msg_at: timestamp("last_msg_at", { withTimezone: true }),
+});
 
-// Existing in Orbis-Track: chat_messages
-// cm_id, cm_role, cm_content, cm_content_json, cm_status, cm_parent_id, cm_cr_id, created_at
+// Chat Messages Table (existing in Orbis-Track)
+export const chatMessages = pgTable("chat_messages", {
+    cm_id: bigserial("cm_id", { mode: "number" }).primaryKey(),
+    cm_cr_id: integer("cm_cr_id").notNull(),
+    cm_role: varchar("cm_role", { length: 20 }).notNull(),
+    cm_content: text("cm_content").notNull(),
+    cm_content_json: jsonb("cm_content_json"),
+    cm_status: varchar("cm_status", { length: 20 }).notNull().default("ok"),
+    cm_parent_id: integer("cm_parent_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).default(sql`NOW()`).notNull(),
+});
 
-// Existing in Orbis-Track: chat_attachments
-// catt_id, catt_cm_id, catt_file_path, created_at
+// Chat Attachments Table (existing in Orbis-Track)
+export const chatAttachments = pgTable("chat_attachments", {
+    catt_id: bigserial("catt_id", { mode: "number" }).primaryKey(),
+    catt_cm_id: integer("catt_cm_id").notNull(),
+    catt_file_path: varchar("catt_file_path", { length: 500 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).default(sql`NOW()`).notNull(),
+});
 
 // ============================================================================
 // RAG Schema - Embeddings (New table for giga-chatbot)
@@ -69,36 +90,14 @@ export const embeddings = pgTable(
 export type Embedding = typeof embeddings.$inferSelect;
 export type NewEmbedding = typeof embeddings.$inferInsert;
 
-// ============================================================================
-// Interfaces for existing Orbis-Track tables (for type safety)
-// ============================================================================
+export type ChatRoom = typeof chatRooms.$inferSelect;
+export type NewChatRoom = typeof chatRooms.$inferInsert;
 
-export interface ChatRoom {
-    cr_id: number;
-    cr_us_id: number;
-    cr_title: string | null;
-    created_at: Date;
-    updated_at: Date | null;
-    last_msg_at: Date | null;
-}
+export type ChatMessage = typeof chatMessages.$inferSelect;
+export type NewChatMessage = typeof chatMessages.$inferInsert;
 
-export interface ChatMessage {
-    cm_id: number;
-    cm_role: "user" | "assistant" | "system" | "tool";
-    cm_content: string;
-    cm_content_json: unknown | null;
-    cm_status: "ok" | "error" | "blocked";
-    cm_parent_id: number | null;
-    cm_cr_id: number;
-    created_at: Date;
-}
-
-export interface ChatAttachment {
-    catt_id: number;
-    catt_cm_id: number;
-    catt_file_path: string;
-    created_at: Date;
-}
+export type ChatAttachment = typeof chatAttachments.$inferSelect;
+export type NewChatAttachment = typeof chatAttachments.$inferInsert;
 
 // Orbis-Track Business Types for RAG
 export interface Device {
