@@ -10,13 +10,17 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - NEXT_PUBLIC_BASE_PATH=/chat
       - DATABASE_URL=${DATABASE_URL}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_MODEL_NAME=${GOOGLE_MODEL_NAME:-gemini-2.0-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-embedding-001}
       - JWT_SECRET=${JWT_SECRET}
-      - JWT_ISSUER=${JWT_ISSUER:-orbis-track}
-      - JWT_AUDIENCE=${JWT_AUDIENCE:-giga-chatbot}
+      - JWT_ISSUER=${JWT_ISSUER}
+      - JWT_AUDIENCE=${JWT_AUDIENCE}
       - MAIN_APP_URL=${MAIN_APP_URL:-http://localhost:3001}
-      - COOKIE_NAME=${COOKIE_NAME:-token}
+      - COOKIE_NAME=${COOKIE_NAME}
+      - AI_TIMEOUT_MS=${AI_TIMEOUT_MS:-45000}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-json}
@@ -45,6 +49,7 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=${DATABASE_URL}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-embedding-001}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}

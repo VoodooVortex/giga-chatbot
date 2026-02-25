@@ -49,7 +49,7 @@ const PROFANITY_PATTERNS = [
  * Check for profanity in text (Thai + English)
  */
 export function checkProfanity(text: string): SafetyCheckResult {
-    const normalizedText = text.toLowerCase().trim();
+    const normalizedText = String(text ?? "").toLowerCase().trim();
 
     // Check exact matches
     for (const word of THAI_PROFANITY) {
@@ -162,7 +162,7 @@ const SUSPICIOUS_COMBINATIONS = [
  * Check for prompt injection attempts
  */
 export function checkPromptInjection(text: string): SafetyCheckResult {
-    const normalizedText = text.toLowerCase().trim();
+    const normalizedText = String(text ?? "").toLowerCase().trim();
 
     // Check pattern matches
     for (const pattern of PROMPT_INJECTION_PATTERNS) {
@@ -224,7 +224,7 @@ export function checkCodeRequest(text: string, allowCode: boolean = false): Safe
         return { isSafe: true, level: "basic" };
     }
 
-    const normalizedText = text.toLowerCase().trim();
+    const normalizedText = String(text ?? "").toLowerCase().trim();
 
     for (const pattern of CODE_REQUEST_PATTERNS) {
         if (pattern.test(normalizedText)) {
@@ -301,11 +301,12 @@ export function runSafetyChecks(
  * Log safety violations for monitoring
  */
 function logViolation(text: string, result: SafetyCheckResult): void {
+    const safeText = String(text ?? "");
     logger.warn("Safety violation detected", {
         violation: result.violation,
         level: result.level,
         details: result.details,
-        textPreview: text.slice(0, 100), // Log only first 100 chars
+        textPreview: safeText.slice(0, 100), // Log only first 100 chars
     });
 }
 

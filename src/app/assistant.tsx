@@ -15,9 +15,12 @@ interface AssistantProps {
 }
 
 export const Assistant = ({ roomId }: AssistantProps) => {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
   const runtime = useChatRuntime({
     transport: new AssistantChatTransport({
-      api: roomId ? `/api/chat/rooms/${roomId}` : "/api/chat",
+      api: roomId
+        ? `${basePath}/api/chat/rooms/${roomId}`
+        : `${basePath}/api/chat`,
     }),
   });
 

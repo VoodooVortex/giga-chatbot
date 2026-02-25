@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { extractTokenFromCookie, verifyToken } from "@/lib/auth/jwt";
+import { verifyToken } from "@/lib/auth/jwt";
 import { env } from "@/lib/config";
 
 const COOKIE_NAME = env.COOKIE_NAME;
@@ -19,8 +19,14 @@ function isPublicPath(path: string): boolean {
     );
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
     const { pathname } = request.nextUrl;
+
+    // Backward compatibility: do not auth-redirect bare /api requests
+    // (with basePath enabled, app API should be /chat/api/*)
+    if (pathname.startsWith("/api/")) {
+        return NextResponse.next();
+    }
 
     // Skip middleware for public paths
     if (isPublicPath(pathname)) {

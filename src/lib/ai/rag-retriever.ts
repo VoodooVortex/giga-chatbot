@@ -21,10 +21,10 @@ interface EmbeddingResult {
 }
 
 /**
- * Generate embedding for query using Google text-embedding-004
+ * Generate embedding for query using configured Google embedding model
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
-    const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
     const result = await model.embedContent(query);
     return result.embedding.values;
 }

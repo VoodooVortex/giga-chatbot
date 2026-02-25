@@ -67,7 +67,7 @@ export async function generateEmbeddings(chunks: TextChunk[]): Promise<number[][
         return [];
     }
 
-    const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
+    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
 
     try {
         const embeddings: number[][] = [];

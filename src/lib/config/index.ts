@@ -36,7 +36,9 @@ const envSchema = z.object({
 
     // Google AI (required)
     GOOGLE_API_KEY: z.string().default(""),
-    GOOGLE_MODEL_NAME: z.string().default("gemini-1.5-flash"),
+    GOOGLE_MODEL_NAME: z.string().default("gemini-2.0-flash"),
+    EMBEDDING_MODEL: z.string().default("embedding-001"),
+    AI_TIMEOUT_MS: z.string().default("45000"),
 
     // RAG
     EMBEDDING_DIMENSION: z.string().default("768"),
@@ -98,6 +100,7 @@ export const env = {
     WORKER_CONCURRENCY: parseInt(envData.WORKER_CONCURRENCY, 10),
     WORKER_RETRY_MAX: parseInt(envData.WORKER_RETRY_MAX, 10),
     WORKER_RETRY_DELAY_MS: parseInt(envData.WORKER_RETRY_DELAY_MS, 10),
+    AI_TIMEOUT_MS: parseInt(envData.AI_TIMEOUT_MS, 10),
     ENABLE_REQUEST_LOGGING: envData.ENABLE_REQUEST_LOGGING === "true",
 
     // Validation function to call at runtime

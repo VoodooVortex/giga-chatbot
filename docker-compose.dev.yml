@@ -14,6 +14,10 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=3000
+      - NEXT_PUBLIC_BASE_PATH=/chat
+      - GOOGLE_MODEL_NAME=${GOOGLE_MODEL_NAME:-gemini-2.0-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-embedding-001}
+      - AI_TIMEOUT_MS=${AI_TIMEOUT_MS:-45000}
     networks:
       - orbis_dev_network
     healthcheck:
@@ -37,6 +41,7 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=${DATABASE_URL}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-embedding-001}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
       - CHUNK_SIZE=${CHUNK_SIZE:-512}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-50}

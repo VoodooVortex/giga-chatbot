@@ -3,11 +3,83 @@
  * Uses LangGraph-based orchestration for intent classification, RAG, and tool calling
  */
 import { NextRequest, NextResponse } from "next/server";
+import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { getApiSession } from "@/lib/auth/session";
 import { orchestrate } from "@/lib/ai/orchestrator";
+import { env } from "@/lib/config";
 
 // Simple in-memory rate limiting (replace with Redis in production)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === "string" ? text : "";
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+    return parts;
+  }
+
+  if (content && typeof content === "object") {
+    const maybeText = (content as { text?: unknown; content?: unknown }).text;
+    if (typeof maybeText === "string") return maybeText.trim();
+
+    const maybeContent = (content as { content?: unknown }).content;
+    if (typeof maybeContent === "string") return maybeContent.trim();
+  }
+
+  return "";
+}
+
+function extractMessageTextDeep(value: unknown, depth = 0): string {
+  if (depth > 5) return "";
+
+  const direct = extractMessageText(value);
+  if (direct) return direct;
+
+  if (Array.isArray(value)) {
+    const combined = value
+      .map((item) => extractMessageTextDeep(item, depth + 1))
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    return combined;
+  }
+
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+
+    // Try common message keys first
+    const preferredKeys = ["content", "text", "parts", "value", "message"];
+    for (const key of preferredKeys) {
+      if (key in obj) {
+        const extracted = extractMessageTextDeep(obj[key], depth + 1);
+        if (extracted) return extracted;
+      }
+    }
+
+    // Fallback: search all object values
+    for (const nestedValue of Object.values(obj)) {
+      const extracted = extractMessageTextDeep(nestedValue, depth + 1);
+      if (extracted) return extracted;
+    }
+  }
+
+  return "";
+}
 
 function checkRateLimit(identifier: string): boolean {
   const now = Date.now();
@@ -27,6 +99,43 @@ function checkRateLimit(identifier: string): boolean {
 
   record.count++;
   return true;
+}
+
+function toChatStreamResponse(text: string, metadata?: unknown): Response {
+  const textPartId = crypto.randomUUID();
+
+  const stream = createUIMessageStream({
+    execute: ({ writer }) => {
+      writer.write({
+        type: "start",
+        messageMetadata: metadata,
+      });
+      writer.write({ type: "text-start", id: textPartId });
+      writer.write({ type: "text-delta", id: textPartId, delta: text });
+      writer.write({ type: "text-end", id: textPartId });
+      writer.write({
+        type: "finish",
+        finishReason: "stop",
+        messageMetadata: metadata,
+      });
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream });
+}
+
+async function orchestrateWithTimeout(
+  params: Parameters<typeof orchestrate>[0],
+  timeoutMs: number,
+): Promise<Awaited<ReturnType<typeof orchestrate>>> {
+  return Promise.race([
+    orchestrate(params),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error("AI orchestration timed out"));
+      }, timeoutMs);
+    }),
+  ]);
 }
 
 export async function POST(req: NextRequest) {
@@ -53,7 +162,7 @@ export async function POST(req: NextRequest) {
 
     // Parse request body
     const body = await req.json();
-    const { messages, roomId } = body;
+    const { messages } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -71,42 +180,63 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const userQuery = extractMessageTextDeep(lastMessage);
+    if (!userQuery) {
+      return NextResponse.json(
+        { error: "Bad request", message: "Last user message content is required" },
+        { status: 400 }
+      );
+    }
+
     // Build conversation history (last 5 messages for context)
-    const conversationHistory = messages.slice(-6, -1).map((m: { role: string; content: string }) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content
-    }));
+    const conversationHistory = messages
+      .slice(-6, -1)
+      .map((m: { role: string; content: unknown }) => ({
+        role: m.role as "user" | "assistant",
+        content: extractMessageTextDeep(m),
+      }))
+      .filter((m) => m.content.length > 0);
 
     // Run AI orchestration
-    const result = await orchestrate({
-      query: lastMessage.content,
-      cookie: cookieHeader || undefined,
-      conversationHistory,
-      useHybridSearch: true
-    });
+    let result: Awaited<ReturnType<typeof orchestrate>>;
+    try {
+      result = await orchestrateWithTimeout(
+        {
+          query: userQuery,
+          cookie: cookieHeader || undefined,
+          conversationHistory,
+          useHybridSearch: true,
+        },
+        env.AI_TIMEOUT_MS,
+      );
+    } catch (error) {
+      console.error("[Chat API] Orchestration failed or timed out:", error);
+      return toChatStreamResponse(
+        "ขออภัย ระบบ AI ตอบช้ากว่าปกติในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่",
+        {
+          intent: "fallback",
+          degraded: true,
+          requestId: crypto.randomUUID(),
+        },
+      );
+    }
 
     // Check if content was blocked by guardrails
     if (result.intent === "blocked") {
-      return NextResponse.json({
-        message: result.response,
+      return toChatStreamResponse(result.response, {
+        intent: "blocked",
         blocked: true,
         violation: result.safetyResult?.violation,
         level: result.safetyResult?.level,
-        metadata: {
-          intent: "blocked",
-          requestId: crypto.randomUUID()
-        }
+        requestId: crypto.randomUUID(),
       });
     }
 
-    // Return response with metadata for debugging/UI
-    return NextResponse.json({
-      message: result.response,
-      metadata: {
-        intent: result.intent,
-        sources: result.sources,
-        requestId: crypto.randomUUID()
-      }
+    // Return response as UI message stream (AI SDK protocol)
+    return toChatStreamResponse(result.response, {
+      intent: result.intent,
+      sources: result.sources,
+      requestId: crypto.randomUUID(),
     });
 
   } catch (error) {
