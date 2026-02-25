@@ -10,6 +10,7 @@ import { env } from "@/lib/config";
 
 // Simple in-memory rate limiting (replace with Redis in production)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+let aiQuotaCooldownUntil = 0;
 
 function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
@@ -124,6 +125,45 @@ function toChatStreamResponse(text: string, metadata?: unknown): Response {
   return createUIMessageStreamResponse({ stream });
 }
 
+function parseRetryDelayMs(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+
+  // Example: "Please retry in 30.49687401s"
+  const retryInMatch = message.match(/retry\s+in\s+([\d.]+)s/i);
+  if (retryInMatch?.[1]) {
+    const secs = Number.parseFloat(retryInMatch[1]);
+    if (Number.isFinite(secs) && secs > 0) {
+      return Math.ceil(secs * 1000);
+    }
+  }
+
+  // Example in details: "retryDelay":"45s"
+  const retryDelayMatch = message.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
+  if (retryDelayMatch?.[1]) {
+    const secs = Number.parseInt(retryDelayMatch[1], 10);
+    if (Number.isFinite(secs) && secs > 0) {
+      return secs * 1000;
+    }
+  }
+
+  return null;
+}
+
+function isQuotaExceededError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+
+  return (
+    status === 429 ||
+    /too\s+many\s+requests/i.test(message) ||
+    /quota\s+exceeded/i.test(message) ||
+    /rate\s*limits?/i.test(message)
+  );
+}
+
 async function orchestrateWithTimeout(
   params: Parameters<typeof orchestrate>[0],
   timeoutMs: number,
@@ -197,6 +237,25 @@ export async function POST(req: NextRequest) {
       }))
       .filter((m) => m.content.length > 0);
 
+    // Gemini quota cooldown guard (avoid hammering provider during 429 window)
+    const now = Date.now();
+    if (now < aiQuotaCooldownUntil) {
+      const retryAfterSec = Math.max(
+        1,
+        Math.ceil((aiQuotaCooldownUntil - now) / 1000),
+      );
+      return toChatStreamResponse(
+        `ขออภัย โควต้า AI ชั่วคราวเต็ม กรุณาลองใหม่อีกครั้งในประมาณ ${retryAfterSec} วินาที`,
+        {
+          intent: "fallback",
+          degraded: true,
+          reason: "quota_cooldown",
+          retryAfterSec,
+          requestId: crypto.randomUUID(),
+        },
+      );
+    }
+
     // Run AI orchestration
     let result: Awaited<ReturnType<typeof orchestrate>>;
     try {
@@ -205,12 +264,30 @@ export async function POST(req: NextRequest) {
           query: userQuery,
           cookie: cookieHeader || undefined,
           conversationHistory,
-          useHybridSearch: true,
+          useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
         },
         env.AI_TIMEOUT_MS,
       );
     } catch (error) {
       console.error("[Chat API] Orchestration failed or timed out:", error);
+
+      if (isQuotaExceededError(error)) {
+        const retryDelayMs = parseRetryDelayMs(error) ?? 30_000;
+        aiQuotaCooldownUntil = Date.now() + retryDelayMs;
+        const retryAfterSec = Math.max(1, Math.ceil(retryDelayMs / 1000));
+
+        return toChatStreamResponse(
+          `ขออภัย โควต้า AI เต็มชั่วคราว กรุณาลองใหม่อีกครั้งในประมาณ ${retryAfterSec} วินาที`,
+          {
+            intent: "fallback",
+            degraded: true,
+            reason: "quota_exceeded",
+            retryAfterSec,
+            requestId: crypto.randomUUID(),
+          },
+        );
+      }
+
       return toChatStreamResponse(
         "ขออภัย ระบบ AI ตอบช้ากว่าปกติในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่",
         {

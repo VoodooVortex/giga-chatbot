@@ -7,7 +7,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "@/lib/config";
 import type { RAGContext, ToolCall } from "./types";
 
-const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
+const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_CHAT);
 
 interface GenerateResponseOptions {
     query: string;

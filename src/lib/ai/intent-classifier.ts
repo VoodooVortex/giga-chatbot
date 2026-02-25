@@ -7,7 +7,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "@/lib/config";
 import type { ClassifiedIntent, IntentType } from "./types";
 
-const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
+const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_CHAT);
 
 const INTENT_PROMPT = `You are an intent classifier for an IT asset management chatbot.
 Analyze the user query and classify it into one of these intents:
@@ -37,6 +37,18 @@ Respond ONLY in JSON format:
 }`;
 
 export async function classifyIntent(query: string): Promise<ClassifiedIntent> {
+    const heuristic = classifyIntentHeuristic(query);
+
+    // In low-quota mode or when classifier is disabled, avoid LLM calls whenever possible.
+    if (env.LOW_QUOTA_MODE || !env.ENABLE_LLM_INTENT_CLASSIFIER) {
+        return heuristic;
+    }
+
+    // For very obvious intents, skip classifier model call to save quota.
+    if (heuristic.confidence >= 0.9) {
+        return heuristic;
+    }
+
     const model = genAI.getGenerativeModel({
         model: env.GOOGLE_MODEL_NAME,
         generationConfig: {
@@ -78,6 +90,44 @@ export async function classifyIntent(query: string): Promise<ClassifiedIntent> {
             entities: { keywords: extractKeywords(query) }
         };
     }
+}
+
+function classifyIntentHeuristic(query: string): ClassifiedIntent {
+    const normalized = query.toLowerCase();
+
+    const hasNotification = /แจ้งเตือน|notification|alert/i.test(normalized);
+    const hasTicket = /ticket|issue|ปัญหา|งานซ่อม|incident|request/i.test(normalized);
+    const hasDevice = /device|asset|อุปกรณ์|คอม|โน้ตบุ๊ก|โน้ตบุค|laptop|pc|tag|serial/i.test(normalized);
+
+    if (hasNotification) {
+        return {
+            intent: "notification_check",
+            confidence: 0.95,
+            entities: { keywords: extractKeywords(query) }
+        };
+    }
+
+    if (hasTicket) {
+        return {
+            intent: "ticket_lookup",
+            confidence: 0.9,
+            entities: { keywords: extractKeywords(query) }
+        };
+    }
+
+    if (hasDevice) {
+        return {
+            intent: "device_lookup",
+            confidence: 0.9,
+            entities: { keywords: extractKeywords(query) }
+        };
+    }
+
+    return {
+        intent: "general_question",
+        confidence: 0.65,
+        entities: { keywords: extractKeywords(query) }
+    };
 }
 
 function extractKeywords(query: string): string[] {

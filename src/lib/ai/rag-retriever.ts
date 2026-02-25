@@ -9,7 +9,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "@/lib/config";
 import type { RAGContext } from "./types";
 
-const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
+const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_EMBEDDING);
+const queryEmbeddingCache = new Map<string, { embedding: number[]; expiresAt: number }>();
 
 interface EmbeddingResult {
     re_id: number;
@@ -24,9 +25,31 @@ interface EmbeddingResult {
  * Generate embedding for query using configured Google embedding model
  */
 export async function generateQueryEmbedding(query: string): Promise<number[]> {
+    const cacheKey = normalizeQuery(query);
+    const now = Date.now();
+    const cached = queryEmbeddingCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > now) {
+        return cached.embedding;
+    }
+
     const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
     const result = await model.embedContent(query);
-    return result.embedding.values;
+    const embedding = result.embedding.values;
+
+    queryEmbeddingCache.set(cacheKey, {
+        embedding,
+        expiresAt: now + env.QUERY_EMBEDDING_CACHE_TTL_MS,
+    });
+
+    // Keep cache bounded (simple FIFO eviction by insertion order)
+    while (queryEmbeddingCache.size > env.QUERY_EMBEDDING_CACHE_MAX_SIZE) {
+        const firstKey = queryEmbeddingCache.keys().next().value as string | undefined;
+        if (!firstKey) break;
+        queryEmbeddingCache.delete(firstKey);
+    }
+
+    return embedding;
 }
 
 /**
@@ -164,4 +187,8 @@ function extractKeywords(query: string): string[] {
         .replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s]/g, " ")
         .split(/\s+/)
         .filter(word => word.length > 2 && !stopWords.has(word));
+}
+
+function normalizeQuery(query: string): string {
+    return query.toLowerCase().replace(/\s+/g, " ").trim();
 }

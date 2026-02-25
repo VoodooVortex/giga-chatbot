@@ -3,7 +3,7 @@ import { env } from "./config";
 import type { TextChunk, EmbeddingResult, RecordData } from "./types";
 
 // Initialize Google Generative AI client
-const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY);
+const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_EMBEDDING);
 
 /**
  * Chunk text into smaller pieces for embedding
@@ -71,10 +71,19 @@ export async function generateEmbeddings(chunks: TextChunk[]): Promise<number[][
 
     try {
         const embeddings: number[][] = [];
+        const batchCache = new Map<string, number[]>();
 
         // Google doesn't support batching in the same way, so we process one by one
         for (const chunk of chunks) {
+            const cacheKey = chunk.content.trim();
+            const cached = batchCache.get(cacheKey);
+            if (cached) {
+                embeddings.push(cached);
+                continue;
+            }
+
             const result = await model.embedContent(chunk.content);
+            batchCache.set(cacheKey, result.embedding.values);
             embeddings.push(result.embedding.values);
         }
 

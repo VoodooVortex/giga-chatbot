@@ -36,9 +36,19 @@ const envSchema = z.object({
 
     // Google AI (required)
     GOOGLE_API_KEY: z.string().default(""),
+    GOOGLE_API_KEY_CHAT: z.string().default(""),
+    GOOGLE_API_KEY_EMBEDDING: z.string().default(""),
     GOOGLE_MODEL_NAME: z.string().default("gemini-2.0-flash"),
     EMBEDDING_MODEL: z.string().default("embedding-001"),
     AI_TIMEOUT_MS: z.string().default("45000"),
+    LOW_QUOTA_MODE: z.string().default("false"),
+    ENABLE_LLM_INTENT_CLASSIFIER: z.string().default("true"),
+    ENABLE_RAG_HYBRID_SEARCH: z.string().default("true"),
+    ENABLE_RAG_GENERAL_QUESTION: z.string().default("true"),
+    ENABLE_RAG_DEVICE_LOOKUP: z.string().default("false"),
+    ENABLE_RAG_TICKET_LOOKUP: z.string().default("false"),
+    QUERY_EMBEDDING_CACHE_TTL_MS: z.string().default("300000"),
+    QUERY_EMBEDDING_CACHE_MAX_SIZE: z.string().default("256"),
 
     // RAG
     EMBEDDING_DIMENSION: z.string().default("768"),
@@ -92,6 +102,8 @@ function validateRequiredEnv() {
 
 export const env = {
     ...envData,
+    GOOGLE_API_KEY_CHAT: envData.GOOGLE_API_KEY_CHAT || envData.GOOGLE_API_KEY,
+    GOOGLE_API_KEY_EMBEDDING: envData.GOOGLE_API_KEY_EMBEDDING || envData.GOOGLE_API_KEY,
     PORT: parseInt(envData.PORT, 10),
     EMBEDDING_DIMENSION: parseInt(envData.EMBEDDING_DIMENSION, 10),
     CHUNK_SIZE: parseInt(envData.CHUNK_SIZE, 10),
@@ -101,6 +113,14 @@ export const env = {
     WORKER_RETRY_MAX: parseInt(envData.WORKER_RETRY_MAX, 10),
     WORKER_RETRY_DELAY_MS: parseInt(envData.WORKER_RETRY_DELAY_MS, 10),
     AI_TIMEOUT_MS: parseInt(envData.AI_TIMEOUT_MS, 10),
+    QUERY_EMBEDDING_CACHE_TTL_MS: parseInt(envData.QUERY_EMBEDDING_CACHE_TTL_MS, 10),
+    QUERY_EMBEDDING_CACHE_MAX_SIZE: parseInt(envData.QUERY_EMBEDDING_CACHE_MAX_SIZE, 10),
+    LOW_QUOTA_MODE: envData.LOW_QUOTA_MODE === "true",
+    ENABLE_LLM_INTENT_CLASSIFIER: envData.ENABLE_LLM_INTENT_CLASSIFIER === "true",
+    ENABLE_RAG_HYBRID_SEARCH: envData.ENABLE_RAG_HYBRID_SEARCH === "true",
+    ENABLE_RAG_GENERAL_QUESTION: envData.ENABLE_RAG_GENERAL_QUESTION === "true",
+    ENABLE_RAG_DEVICE_LOOKUP: envData.ENABLE_RAG_DEVICE_LOOKUP === "true",
+    ENABLE_RAG_TICKET_LOOKUP: envData.ENABLE_RAG_TICKET_LOOKUP === "true",
     ENABLE_REQUEST_LOGGING: envData.ENABLE_REQUEST_LOGGING === "true",
 
     // Validation function to call at runtime

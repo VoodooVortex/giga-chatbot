@@ -11,6 +11,7 @@ const envSchema = z.object({
 
     // Google (for embeddings)
     GOOGLE_API_KEY: z.string(),
+    GOOGLE_API_KEY_EMBEDDING: z.string().optional(),
 
     // RAG Config
     EMBEDDING_MODEL: z.string().default("embedding-001"),
@@ -42,6 +43,7 @@ if (!parsed.success) {
 
 export const env = {
     ...parsed.data,
+    GOOGLE_API_KEY_EMBEDDING: parsed.data.GOOGLE_API_KEY_EMBEDDING ?? parsed.data.GOOGLE_API_KEY,
     WORKER_RETRY_MAX: parseInt(
         parsed.data.WORKER_RETRY_MAX ?? parsed.data.WORKER_MAX_RETRIES ?? "3",
         10

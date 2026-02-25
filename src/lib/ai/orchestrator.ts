@@ -9,6 +9,7 @@ import { retrieveRAGContext, retrieveHybridContext } from "./rag-retriever";
 import { executeToolCalls } from "./tools";
 import { generateResponse } from "./response-generator";
 import { runSafetyChecks, getBlockedResponse } from "@/lib/safety/guardrails";
+import { env } from "@/lib/config";
 import type { ClassifiedIntent, RAGContext, ToolCall } from "./types";
 import type { SafetyCheckResult } from "@/lib/safety/guardrails";
 
@@ -110,12 +111,24 @@ export async function orchestrate(
  * Determine if RAG should be used for this intent
  */
 function shouldUseRAG(intent: string): boolean {
-  // RAG is used for general questions and as fallback for other intents
-  return (
-    intent === "general_question" ||
-    intent === "device_lookup" ||
-    intent === "ticket_lookup"
-  );
+  // In low quota mode, only allow RAG for general questions (if enabled)
+  if (env.LOW_QUOTA_MODE) {
+    return intent === "general_question" && env.ENABLE_RAG_GENERAL_QUESTION;
+  }
+
+  if (intent === "general_question") {
+    return env.ENABLE_RAG_GENERAL_QUESTION;
+  }
+
+  if (intent === "device_lookup") {
+    return env.ENABLE_RAG_DEVICE_LOOKUP;
+  }
+
+  if (intent === "ticket_lookup") {
+    return env.ENABLE_RAG_TICKET_LOOKUP;
+  }
+
+  return false;
 }
 
 /**
