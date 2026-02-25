@@ -1,9 +1,22 @@
-import { config } from "dotenv";
+/**
+ * Environment Configuration
+ * Loads and validates environment variables
+ * Note: In Docker, env vars are passed via docker-compose, no need for dotenv
+ */
+
 import { z } from "zod";
 
-// Load environment variables (try .env.local first, then .env)
-config({ path: ".env.local" });
-config({ path: ".env" });
+// Only load dotenv in development (not in Docker/Production)
+if (process.env.NODE_ENV !== "production") {
+    try {
+        // Dynamic import to avoid Edge Runtime issues
+        const dotenv = require("dotenv");
+        dotenv.config({ path: ".env.local" });
+        dotenv.config({ path: ".env" });
+    } catch {
+        // Silent fail in Edge Runtime
+    }
+}
 
 const envSchema = z.object({
     // App
