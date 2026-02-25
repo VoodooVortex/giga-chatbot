@@ -1,19 +1,23 @@
 /**
  * AI Orchestrator using LangGraph pattern
  * Coordinates intent classification, RAG retrieval, tool calling, and response generation
+ * Includes content safety guardrails
  */
 
 import { classifyIntent } from "./intent-classifier";
 import { retrieveRAGContext, retrieveHybridContext } from "./rag-retriever";
 import { executeToolCalls } from "./tools";
 import { generateResponse } from "./response-generator";
+import { runSafetyChecks, getBlockedResponse } from "@/lib/safety/guardrails";
 import type { ClassifiedIntent, RAGContext, ToolCall } from "./types";
+import type { SafetyCheckResult } from "@/lib/safety/guardrails";
 
 interface OrchestratorOptions {
   query: string;
   cookie?: string;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   useHybridSearch?: boolean;
+  skipSafetyCheck?: boolean;
 }
 
 interface OrchestratorResult {
@@ -23,6 +27,7 @@ interface OrchestratorResult {
     rag?: RAGContext[];
     tools?: ToolCall[];
   };
+  safetyResult?: SafetyCheckResult;
 }
 
 /**
@@ -37,7 +42,26 @@ export async function orchestrate(
     cookie,
     conversationHistory,
     useHybridSearch = true,
+    skipSafetyCheck = false,
   } = options;
+
+  // Step 0: Content Safety Check
+  if (!skipSafetyCheck) {
+    console.log("[AI Orchestrator] Step 0: Running content safety checks...");
+    const safetyResult = runSafetyChecks(query);
+
+    if (!safetyResult.isSafe) {
+      console.warn(`[AI Orchestrator] Content blocked: ${safetyResult.violation}`);
+      return {
+        response: getBlockedResponse(safetyResult.violation || "unknown"),
+        intent: "blocked",
+        sources: {},
+        safetyResult,
+      };
+    }
+
+    console.log("[AI Orchestrator] Content safety checks passed");
+  }
 
   // Step 1: Classify Intent
   console.log("[AI Orchestrator] Step 1: Classifying intent...");

@@ -85,6 +85,20 @@ export async function POST(req: NextRequest) {
       useHybridSearch: true
     });
 
+    // Check if content was blocked by guardrails
+    if (result.intent === "blocked") {
+      return NextResponse.json({
+        message: result.response,
+        blocked: true,
+        violation: result.safetyResult?.violation,
+        level: result.safetyResult?.level,
+        metadata: {
+          intent: "blocked",
+          requestId: crypto.randomUUID()
+        }
+      });
+    }
+
     // Return response with metadata for debugging/UI
     return NextResponse.json({
       message: result.response,
