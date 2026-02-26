@@ -49,20 +49,9 @@ export async function classifyIntent(query: string): Promise<ClassifiedIntent> {
         return heuristic;
     }
 
-    const model = genAI.getGenerativeModel({
-        model: env.GOOGLE_MODEL_NAME,
-        generationConfig: {
-            temperature: 0.1,
-            responseMimeType: "application/json",
-        }
-    });
-
-    const result = await model.generateContent([
-        { text: INTENT_PROMPT },
-        { text: `User query: "${query}"` }
-    ]);
-
-    const response = result.response.text();
+    const response = env.LLM_PROVIDER === "openrouter"
+        ? await classifyIntentWithOpenRouter(query)
+        : await classifyIntentWithGoogle(query);
 
     try {
         const parsed = JSON.parse(response) as ClassifiedIntent;
@@ -90,6 +79,53 @@ export async function classifyIntent(query: string): Promise<ClassifiedIntent> {
             entities: { keywords: extractKeywords(query) }
         };
     }
+}
+
+async function classifyIntentWithGoogle(query: string): Promise<string> {
+    const model = genAI.getGenerativeModel({
+        model: env.GOOGLE_MODEL_NAME,
+        generationConfig: {
+            temperature: 0.1,
+            responseMimeType: "application/json",
+        }
+    });
+
+    const result = await model.generateContent([
+        { text: INTENT_PROMPT },
+        { text: `User query: "${query}"` }
+    ]);
+
+    return result.response.text();
+}
+
+async function classifyIntentWithOpenRouter(query: string): Promise<string> {
+    const response = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.OPENROUTER_API_KEY_CHAT}`,
+        },
+        body: JSON.stringify({
+            model: env.OPENROUTER_MODEL_NAME,
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+            messages: [
+                { role: "system", content: INTENT_PROMPT },
+                { role: "user", content: `User query: "${query}"` },
+            ],
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter intent classification failed: ${response.status} ${errorText}`);
+    }
+
+    const payload = await response.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+    };
+
+    return payload.choices?.[0]?.message?.content ?? "";
 }
 
 function classifyIntentHeuristic(query: string): ClassifiedIntent {

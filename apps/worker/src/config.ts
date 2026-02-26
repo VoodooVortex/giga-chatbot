@@ -10,8 +10,13 @@ const envSchema = z.object({
     DATABASE_URL: z.string().url(),
 
     // Google (for embeddings)
-    GOOGLE_API_KEY: z.string(),
+    GOOGLE_API_KEY: z.string().default(""),
     GOOGLE_API_KEY_EMBEDDING: z.string().optional(),
+    EMBEDDING_PROVIDER: z.enum(["google", "openrouter"]).default("google"),
+    OPENROUTER_API_KEY: z.string().optional(),
+    OPENROUTER_API_KEY_EMBEDDING: z.string().optional(),
+    OPENROUTER_BASE_URL: z.string().default("https://openrouter.ai/api/v1"),
+    OPENROUTER_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
 
     // RAG Config
     EMBEDDING_MODEL: z.string().default("embedding-001"),
@@ -41,9 +46,25 @@ if (!parsed.success) {
     process.exit(1);
 }
 
+const hasGoogleKey = Boolean(parsed.data.GOOGLE_API_KEY || parsed.data.GOOGLE_API_KEY_EMBEDDING);
+const hasOpenRouterKey = Boolean(parsed.data.OPENROUTER_API_KEY || parsed.data.OPENROUTER_API_KEY_EMBEDDING);
+
+let resolvedEmbeddingProvider = parsed.data.EMBEDDING_PROVIDER;
+if (resolvedEmbeddingProvider === "openrouter" && !hasOpenRouterKey) {
+    console.warn("⚠️  EMBEDDING_PROVIDER=openrouter but OpenRouter key is missing, falling back to google");
+    resolvedEmbeddingProvider = "google";
+}
+if (resolvedEmbeddingProvider === "google" && !hasGoogleKey && hasOpenRouterKey) {
+    console.warn("⚠️  Google key is missing, falling back to OpenRouter embeddings");
+    resolvedEmbeddingProvider = "openrouter";
+}
+
 export const env = {
     ...parsed.data,
+    EMBEDDING_PROVIDER: resolvedEmbeddingProvider,
     GOOGLE_API_KEY_EMBEDDING: parsed.data.GOOGLE_API_KEY_EMBEDDING ?? parsed.data.GOOGLE_API_KEY,
+    OPENROUTER_API_KEY_EMBEDDING:
+        parsed.data.OPENROUTER_API_KEY_EMBEDDING ?? parsed.data.OPENROUTER_API_KEY ?? "",
     WORKER_RETRY_MAX: parseInt(
         parsed.data.WORKER_RETRY_MAX ?? parsed.data.WORKER_MAX_RETRIES ?? "3",
         10

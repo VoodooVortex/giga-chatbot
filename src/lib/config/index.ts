@@ -34,12 +34,22 @@ const envSchema = z.object({
     // Main App API
     MAIN_APP_URL: z.string().default("http://localhost:3001"),
 
+    // AI Providers
+    LLM_PROVIDER: z.enum(["google", "openrouter"]).default("google"),
+    EMBEDDING_PROVIDER: z.enum(["google", "openrouter"]).default("google"),
+
     // Google AI (required)
     GOOGLE_API_KEY: z.string().default(""),
     GOOGLE_API_KEY_CHAT: z.string().default(""),
     GOOGLE_API_KEY_EMBEDDING: z.string().default(""),
     GOOGLE_MODEL_NAME: z.string().default("gemini-2.0-flash"),
     EMBEDDING_MODEL: z.string().default("embedding-001"),
+    OPENROUTER_API_KEY: z.string().default(""),
+    OPENROUTER_API_KEY_CHAT: z.string().default(""),
+    OPENROUTER_API_KEY_EMBEDDING: z.string().default(""),
+    OPENROUTER_BASE_URL: z.string().default("https://openrouter.ai/api/v1"),
+    OPENROUTER_MODEL_NAME: z.string().default("openai/gpt-4o-mini"),
+    OPENROUTER_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
     AI_TIMEOUT_MS: z.string().default("45000"),
     LOW_QUOTA_MODE: z.string().default("false"),
     ENABLE_LLM_INTENT_CLASSIFIER: z.string().default("true"),
@@ -81,6 +91,31 @@ if (!parsed.success) {
     envData = parsed.data;
 }
 
+const hasGoogleChatKey = Boolean(envData.GOOGLE_API_KEY_CHAT || envData.GOOGLE_API_KEY);
+const hasGoogleEmbeddingKey = Boolean(envData.GOOGLE_API_KEY_EMBEDDING || envData.GOOGLE_API_KEY);
+const hasOpenRouterChatKey = Boolean(envData.OPENROUTER_API_KEY_CHAT || envData.OPENROUTER_API_KEY);
+const hasOpenRouterEmbeddingKey = Boolean(envData.OPENROUTER_API_KEY_EMBEDDING || envData.OPENROUTER_API_KEY);
+
+let resolvedLlmProvider = envData.LLM_PROVIDER;
+if (resolvedLlmProvider === "openrouter" && !hasOpenRouterChatKey) {
+    console.warn("⚠️  LLM_PROVIDER=openrouter but OpenRouter key is missing, falling back to google");
+    resolvedLlmProvider = "google";
+}
+if (resolvedLlmProvider === "google" && !hasGoogleChatKey && hasOpenRouterChatKey) {
+    console.warn("⚠️  Google chat key is missing, falling back to OpenRouter");
+    resolvedLlmProvider = "openrouter";
+}
+
+let resolvedEmbeddingProvider = envData.EMBEDDING_PROVIDER;
+if (resolvedEmbeddingProvider === "openrouter" && !hasOpenRouterEmbeddingKey) {
+    console.warn("⚠️  EMBEDDING_PROVIDER=openrouter but OpenRouter key is missing, falling back to google");
+    resolvedEmbeddingProvider = "google";
+}
+if (resolvedEmbeddingProvider === "google" && !hasGoogleEmbeddingKey && hasOpenRouterEmbeddingKey) {
+    console.warn("⚠️  Google embedding key is missing, falling back to OpenRouter");
+    resolvedEmbeddingProvider = "openrouter";
+}
+
 // Validate required vars at runtime (not build time)
 function validateRequiredEnv() {
     const errors: string[] = [];
@@ -91,8 +126,17 @@ function validateRequiredEnv() {
     if (!envData.DATABASE_URL) {
         errors.push("DATABASE_URL is required");
     }
-    if (!envData.GOOGLE_API_KEY) {
-        errors.push("GOOGLE_API_KEY is required");
+    if (resolvedLlmProvider === "google" && !envData.GOOGLE_API_KEY && !envData.GOOGLE_API_KEY_CHAT) {
+        errors.push("GOOGLE_API_KEY (or GOOGLE_API_KEY_CHAT) is required when LLM_PROVIDER=google");
+    }
+    if (resolvedLlmProvider === "openrouter" && !envData.OPENROUTER_API_KEY && !envData.OPENROUTER_API_KEY_CHAT) {
+        errors.push("OPENROUTER_API_KEY (or OPENROUTER_API_KEY_CHAT) is required when LLM_PROVIDER=openrouter");
+    }
+    if (resolvedEmbeddingProvider === "google" && !envData.GOOGLE_API_KEY && !envData.GOOGLE_API_KEY_EMBEDDING) {
+        errors.push("GOOGLE_API_KEY (or GOOGLE_API_KEY_EMBEDDING) is required when EMBEDDING_PROVIDER=google");
+    }
+    if (resolvedEmbeddingProvider === "openrouter" && !envData.OPENROUTER_API_KEY && !envData.OPENROUTER_API_KEY_EMBEDDING) {
+        errors.push("OPENROUTER_API_KEY (or OPENROUTER_API_KEY_EMBEDDING) is required when EMBEDDING_PROVIDER=openrouter");
     }
 
     if (errors.length > 0) {
@@ -102,8 +146,12 @@ function validateRequiredEnv() {
 
 export const env = {
     ...envData,
+    LLM_PROVIDER: resolvedLlmProvider,
+    EMBEDDING_PROVIDER: resolvedEmbeddingProvider,
     GOOGLE_API_KEY_CHAT: envData.GOOGLE_API_KEY_CHAT || envData.GOOGLE_API_KEY,
     GOOGLE_API_KEY_EMBEDDING: envData.GOOGLE_API_KEY_EMBEDDING || envData.GOOGLE_API_KEY,
+    OPENROUTER_API_KEY_CHAT: envData.OPENROUTER_API_KEY_CHAT || envData.OPENROUTER_API_KEY,
+    OPENROUTER_API_KEY_EMBEDDING: envData.OPENROUTER_API_KEY_EMBEDDING || envData.OPENROUTER_API_KEY,
     PORT: parseInt(envData.PORT, 10),
     EMBEDDING_DIMENSION: parseInt(envData.EMBEDDING_DIMENSION, 10),
     CHUNK_SIZE: parseInt(envData.CHUNK_SIZE, 10),

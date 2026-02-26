@@ -33,9 +33,9 @@ export async function generateQueryEmbedding(query: string): Promise<number[]> {
         return cached.embedding;
     }
 
-    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
-    const result = await model.embedContent(query);
-    const embedding = result.embedding.values;
+    const embedding = env.EMBEDDING_PROVIDER === "openrouter"
+        ? await embedWithOpenRouter(query)
+        : await embedWithGoogle(query);
 
     queryEmbeddingCache.set(cacheKey, {
         embedding,
@@ -47,6 +47,42 @@ export async function generateQueryEmbedding(query: string): Promise<number[]> {
         const firstKey = queryEmbeddingCache.keys().next().value as string | undefined;
         if (!firstKey) break;
         queryEmbeddingCache.delete(firstKey);
+    }
+
+    return embedding;
+}
+
+async function embedWithGoogle(query: string): Promise<number[]> {
+    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
+    const result = await model.embedContent(query);
+    return result.embedding.values;
+}
+
+async function embedWithOpenRouter(query: string): Promise<number[]> {
+    const response = await fetch(`${env.OPENROUTER_BASE_URL}/embeddings`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.OPENROUTER_API_KEY_EMBEDDING}`,
+        },
+        body: JSON.stringify({
+            model: env.OPENROUTER_EMBEDDING_MODEL,
+            input: query,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter embedding failed: ${response.status} ${errorText}`);
+    }
+
+    const payload = await response.json() as {
+        data?: Array<{ embedding?: number[] }>;
+    };
+
+    const embedding = payload.data?.[0]?.embedding;
+    if (!embedding || embedding.length === 0) {
+        throw new Error("OpenRouter embedding response did not include vector data");
     }
 
     return embedding;

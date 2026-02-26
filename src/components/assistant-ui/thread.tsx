@@ -42,8 +42,8 @@ export const Thread: FC = () => {
       }}
     >
       <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4"
+        turnAnchor="bottom"
+        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-auto scroll-smooth px-4 pt-4"
         style={{
           background:
             "radial-gradient(ellipse at 50% 45%, rgba(186,220,255,0.50) 0%, rgba(214,234,255,0.25) 45%, rgba(255,255,255,0) 80%)",
@@ -60,12 +60,13 @@ export const Thread: FC = () => {
             AssistantMessage,
           }}
         />
-
-        <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mx-auto mt-auto flex w-full flex-col gap-0 overflow-visible rounded-t-3xl pb-4 md:pb-6">
-          <ThreadScrollToBottom />
-          <Composer />
-        </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
+
+      {/* Composer lives OUTSIDE the scroll area so messages can never go behind it */}
+      <div className="relative mx-auto flex w-full flex-col gap-0 pb-4 md:pb-6">
+        <ThreadScrollToBottom />
+        <Composer />
+      </div>
     </ThreadPrimitive.Root>
   );
 };
@@ -86,7 +87,7 @@ const ThreadScrollToBottom: FC = () => {
 
 const ThreadWelcome: FC = () => {
   return (
-    <div className="aui-thread-welcome-root mx-auto my-auto flex w-full max-w-(--thread-max-width) grow flex-col">
+    <div className="aui-thread-welcome-root mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col">
       <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-center">
         <div className="aui-thread-welcome-message flex size-full flex-col justify-center px-4 items-center gap-4">
           {/* Giga mascot with soft radial glow */}
@@ -133,7 +134,7 @@ const ThreadSuggestions: FC = () => {
   ];
 
   return (
-    <div className="aui-thread-welcome-suggestions flex flex-row gap-2.5 justify-center items-center pb-8">
+    <div className="aui-thread-welcome-suggestions flex flex-row gap-2.5 justify-center items-center pb-4">
       {suggestions.map((s, i) => (
         <ThreadPrimitive.Suggestion
           key={i}

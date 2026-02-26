@@ -20,14 +20,6 @@ interface GenerateResponseOptions {
 export async function generateResponse(options: GenerateResponseOptions): Promise<string> {
     const { query, intent, ragContexts, toolResults, conversationHistory } = options;
 
-    const model = genAI.getGenerativeModel({
-        model: env.GOOGLE_MODEL_NAME,
-        generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-        }
-    });
-
     // Build system prompt based on intent
     const systemPrompt = buildSystemPrompt(intent);
 
@@ -47,8 +39,83 @@ User Query: ${query}
 
 Response:`;
 
+    if (env.LLM_PROVIDER === "openrouter") {
+        return generateWithOpenRouter(fullPrompt);
+    }
+
+    return generateWithGoogle(fullPrompt);
+}
+
+async function generateWithGoogle(fullPrompt: string): Promise<string> {
+    const model = genAI.getGenerativeModel({
+        model: env.GOOGLE_MODEL_NAME,
+        generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
+        }
+    });
+
     const result = await model.generateContent(fullPrompt);
     return result.response.text();
+}
+
+async function generateWithOpenRouter(fullPrompt: string): Promise<string> {
+    const MAX_RETRIES = 3;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        let response: Response;
+        try {
+            response = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${env.OPENROUTER_API_KEY_CHAT}`,
+                },
+                body: JSON.stringify({
+                    model: env.OPENROUTER_MODEL_NAME,
+                    temperature: 0.7,
+                    max_tokens: 2048,
+                    messages: [
+                        { role: "user", content: fullPrompt },
+                    ],
+                }),
+            });
+        } catch (networkErr) {
+            if (attempt === MAX_RETRIES) {
+                console.warn(`[OpenRouter] All ${MAX_RETRIES} attempts failed (network). Falling back to Google.`);
+                return generateWithGoogle(fullPrompt);
+            }
+            const delay = 500 * 2 ** (attempt - 1);
+            console.warn(`[OpenRouter] Network error on attempt ${attempt}/${MAX_RETRIES}. Retrying in ${delay}ms...`, networkErr);
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+        }
+
+        if (response.ok) {
+            const payload = await response.json() as {
+                choices?: Array<{ message?: { content?: string } }>;
+            };
+            return payload.choices?.[0]?.message?.content?.trim() || "ขออภัย ไม่สามารถสร้างคำตอบได้ในขณะนี้";
+        }
+
+        // 5xx → retry; 4xx (client errors) → throw immediately
+        if (response.status >= 400 && response.status < 500) {
+            const errorText = await response.text();
+            throw new Error(`OpenRouter response generation failed: ${response.status} ${errorText}`);
+        }
+
+        if (attempt === MAX_RETRIES) {
+            console.warn(`[OpenRouter] All ${MAX_RETRIES} attempts returned ${response.status}. Falling back to Google.`);
+            return generateWithGoogle(fullPrompt);
+        }
+
+        const delay = 500 * 2 ** (attempt - 1);
+        console.warn(`[OpenRouter] Attempt ${attempt}/${MAX_RETRIES} returned ${response.status}. Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+    }
+
+    // Should never reach here, but TypeScript needs the return
+    return generateWithGoogle(fullPrompt);
 }
 
 function buildSystemPrompt(intent: string): string {

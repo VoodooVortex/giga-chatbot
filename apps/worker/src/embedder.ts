@@ -67,13 +67,11 @@ export async function generateEmbeddings(chunks: TextChunk[]): Promise<number[][
         return [];
     }
 
-    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
-
     try {
         const embeddings: number[][] = [];
         const batchCache = new Map<string, number[]>();
 
-        // Google doesn't support batching in the same way, so we process one by one
+        // Process one-by-one to keep behavior consistent across providers.
         for (const chunk of chunks) {
             const cacheKey = chunk.content.trim();
             const cached = batchCache.get(cacheKey);
@@ -82,9 +80,12 @@ export async function generateEmbeddings(chunks: TextChunk[]): Promise<number[][
                 continue;
             }
 
-            const result = await model.embedContent(chunk.content);
-            batchCache.set(cacheKey, result.embedding.values);
-            embeddings.push(result.embedding.values);
+            const vector = env.EMBEDDING_PROVIDER === "openrouter"
+                ? await embedWithOpenRouter(chunk.content)
+                : await embedWithGoogle(chunk.content);
+
+            batchCache.set(cacheKey, vector);
+            embeddings.push(vector);
         }
 
         return embeddings;
@@ -92,6 +93,42 @@ export async function generateEmbeddings(chunks: TextChunk[]): Promise<number[][
         console.error("Error generating embeddings with Google:", error);
         throw error;
     }
+}
+
+async function embedWithGoogle(text: string): Promise<number[]> {
+    const model = genAI.getGenerativeModel({ model: env.EMBEDDING_MODEL });
+    const result = await model.embedContent(text);
+    return result.embedding.values;
+}
+
+async function embedWithOpenRouter(text: string): Promise<number[]> {
+    const response = await fetch(`${env.OPENROUTER_BASE_URL}/embeddings`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.OPENROUTER_API_KEY_EMBEDDING}`,
+        },
+        body: JSON.stringify({
+            model: env.OPENROUTER_EMBEDDING_MODEL,
+            input: text,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter embedding failed: ${response.status} ${errorText}`);
+    }
+
+    const payload = await response.json() as {
+        data?: Array<{ embedding?: number[] }>;
+    };
+
+    const embedding = payload.data?.[0]?.embedding;
+    if (!embedding || embedding.length === 0) {
+        throw new Error("OpenRouter embedding response did not include vector data");
+    }
+
+    return embedding;
 }
 
 /**

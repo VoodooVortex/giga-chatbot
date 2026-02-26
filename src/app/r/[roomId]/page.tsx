@@ -15,8 +15,7 @@ export default async function RoomPage({ params }: RoomPageProps) {
     <SidebarProvider>
       <main className="flex h-screen w-full overflow-hidden bg-white">
         <div className="flex-1">
-          {/* key forces a full remount when navigating between different rooms */}
-          <Assistant key={roomId} roomId={roomId} />
+          <Assistant roomId={roomId} />
         </div>
         <AppSidebar />
       </main>

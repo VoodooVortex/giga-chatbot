@@ -181,6 +181,11 @@ export async function executeToolCalls(
                 result
             });
         } catch (error) {
+            console.error("[Tools] Tool call failed:", {
+                tool: call.tool,
+                params: call.params,
+                error: error instanceof Error ? error.message : error,
+            });
             results.push({
                 tool: call.tool,
                 params: call.params,

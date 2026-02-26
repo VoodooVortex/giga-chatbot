@@ -7,6 +7,15 @@ import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { getApiSession } from "@/lib/auth/session";
 import { orchestrate } from "@/lib/ai/orchestrator";
 import { env } from "@/lib/config";
+import { db } from "@/lib/db";
+import { chatMessages, chatRooms } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+
+function buildRoomTitle(query: string): string {
+  const normalized = query.replace(/\s+/g, " ").trim();
+  const short = normalized.slice(0, 56).trim();
+  return short ? `${short}${normalized.length > 56 ? "..." : ""}` : "บทสนทนาใหม่";
+}
 
 // Simple in-memory rate limiting (replace with Redis in production)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -228,6 +237,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Create a chat room and persist the user message immediately
+    const userId = Number.parseInt(session.user.id, 10);
+    const [newRoom] = await db
+      .insert(chatRooms)
+      .values({ cr_us_id: userId, cr_title: buildRoomTitle(userQuery), updated_at: new Date() })
+      .returning({ cr_id: chatRooms.cr_id });
+    const roomId = newRoom!.cr_id;
+    await db.insert(chatMessages).values({
+      cm_cr_id: roomId,
+      cm_role: "user",
+      cm_content: userQuery,
+      cm_status: "ok",
+    });
+
     // Build conversation history (last 5 messages for context)
     const conversationHistory = messages
       .slice(-6, -1)
@@ -309,10 +332,23 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Return response as UI message stream (AI SDK protocol)
+    // Persist assistant response and bump updated_at so the room sorts to top
+    await db.insert(chatMessages).values({
+      cm_cr_id: roomId,
+      cm_role: "assistant",
+      cm_content: result.response,
+      cm_status: result.intent === "blocked" ? "blocked" : "ok",
+    });
+    await db
+      .update(chatRooms)
+      .set({ updated_at: new Date() })
+      .where(eq(chatRooms.cr_id, roomId));
+
+    // Return response — include roomId so the client can navigate to the new room
     return toChatStreamResponse(result.response, {
       intent: result.intent,
       sources: result.sources,
+      roomId,
       requestId: crypto.randomUUID(),
     });
 
