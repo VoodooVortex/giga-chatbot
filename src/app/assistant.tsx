@@ -105,14 +105,17 @@ interface AssistantProps {
 export const Assistant = ({ roomId }: AssistantProps) => {
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
   const [initialMessages, setInitialMessages] = React.useState<UIMessage[]>([]);
+  const [isLoading, setIsLoading] = React.useState(!!roomId);
 
   React.useEffect(() => {
     if (!roomId) {
       setInitialMessages([]);
+      setIsLoading(false);
       return;
     }
 
     let isMounted = true;
+    setIsLoading(true);
 
     const fetchRoomMessages = async () => {
       try {
@@ -152,11 +155,13 @@ export const Assistant = ({ roomId }: AssistantProps) => {
 
         if (isMounted) {
           setInitialMessages(mapped);
+          setIsLoading(false);
         }
       } catch (error) {
         console.error("[Assistant] Failed to load room history:", error);
         if (isMounted) {
           setInitialMessages([]);
+          setIsLoading(false);
         }
       }
     };
@@ -168,6 +173,34 @@ export const Assistant = ({ roomId }: AssistantProps) => {
     };
   }, [basePath, roomId]);
 
+  if (isLoading) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-white flex-col gap-4">
+        {/* You can customize this loading state */}
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-900"></div>
+        <div className="text-slate-500 font-medium">กำลังโหลดประวัติแชท...</div>
+      </div>
+    );
+  }
+
+  return (
+    <AssistantInner
+      roomId={roomId}
+      basePath={basePath}
+      initialMessages={initialMessages}
+    />
+  );
+};
+
+const AssistantInner = ({
+  roomId,
+  basePath,
+  initialMessages,
+}: {
+  roomId?: string;
+  basePath: string;
+  initialMessages: UIMessage[];
+}) => {
   const router = useRouter();
 
   const handleNewRoom = React.useCallback(
