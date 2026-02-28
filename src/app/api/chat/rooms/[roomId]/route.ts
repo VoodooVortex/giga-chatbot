@@ -11,6 +11,8 @@ import { env } from "@/lib/config";
 import { db } from "@/lib/db";
 import { chatMessages, chatRooms } from "@/lib/db/schema";
 
+export const dynamic = "force-dynamic";
+
 interface RouteParams {
   params: Promise<{
     roomId: string;
@@ -216,23 +218,6 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       });
     }
 
-    const result = await orchestrateWithTimeout(
-      {
-        query: userQuery,
-        cookie: cookieHeader || undefined,
-        conversationHistory,
-        useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
-      },
-      env.AI_TIMEOUT_MS,
-    );
-
-    await db.insert(chatMessages).values({
-      cm_cr_id: roomIdNum,
-      cm_role: "assistant",
-      cm_content: result.response,
-      cm_status: result.intent === "blocked" ? "blocked" : "ok",
-    });
-
     const normalizedTitle = (room.cr_title || "").trim();
     const shouldGenerateTitle =
       !normalizedTitle ||
@@ -253,6 +238,23 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         .set({ updated_at: new Date() })
         .where(eq(chatRooms.cr_id, roomIdNum));
     }
+
+    const result = await orchestrateWithTimeout(
+      {
+        query: userQuery,
+        cookie: cookieHeader || undefined,
+        conversationHistory,
+        useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
+      },
+      env.AI_TIMEOUT_MS,
+    );
+
+    await db.insert(chatMessages).values({
+      cm_cr_id: roomIdNum,
+      cm_role: "assistant",
+      cm_content: result.response,
+      cm_status: result.intent === "blocked" ? "blocked" : "ok",
+    });
 
     return toChatStreamResponse(result.response, {
       intent: result.intent,

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Roboto } from "next/font/google";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/app-sidebar";
 
 const roboto = Roboto({
   variable: "--font-roboto",
@@ -21,7 +23,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${roboto.variable} antialiased`}>
-        <TooltipProvider>{children}</TooltipProvider>
+        <TooltipProvider>
+          <SidebarProvider>
+            <main className="flex h-screen w-full overflow-hidden bg-white">
+              {children}
+              <AppSidebar />
+            </main>
+          </SidebarProvider>
+        </TooltipProvider>
       </body>
     </html>
   );

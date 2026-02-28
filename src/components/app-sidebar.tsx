@@ -30,17 +30,14 @@ export function AppSidebar() {
   const [rooms, setRooms] = React.useState<ChatRoomItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
 
+  // Full fetch with loading spinner — used only on initial mount.
   const fetchRooms = React.useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${basePath}/api/chat/rooms`, {
+      const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
         credentials: "include",
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to load rooms: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`Failed to load rooms: ${response.status}`);
       const payload = (await response.json()) as { data?: ChatRoomItem[] };
       setRooms(payload.data ?? []);
     } catch (error) {
@@ -51,56 +48,90 @@ export function AppSidebar() {
     }
   }, [basePath]);
 
+  // Silent background refresh — no loading spinner, no flicker.
+  const silentRefresh = React.useCallback(async () => {
+    try {
+      const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { data?: ChatRoomItem[] };
+      setRooms(payload.data ?? []);
+    } catch {
+      // best-effort
+    }
+  }, [basePath]);
+
   const pathname = usePathname();
-  // Allow "แชทใหม่" only when the current room already has messages.
-  // Empty rooms are filtered out of the `rooms` list by the API, so if the
-  // current roomId isn't present in the list the room is still empty.
+
   const currentRoomId = React.useMemo(() => {
     const match = pathname.match(/^\/r\/(\d+)/);
     return match ? Number(match[1]) : null;
   }, [pathname]);
+
+  // Allow "แชทใหม่" only when the current room already has messages.
   const isInRoom =
     currentRoomId !== null && rooms.some((r) => r.cr_id === currentRoomId);
 
+  // Initial load with spinner.
   React.useEffect(() => {
     void fetchRooms();
-  }, [fetchRooms, pathname]);
+  }, [fetchRooms]);
 
+  // Re-fetch silently on every navigation (catches new-chat room creation and
+  // any ordering updates that happened while the user was in a different room).
+  const prevPathnameRef = React.useRef(pathname);
   React.useEffect(() => {
-    const handler = () => {
-      void fetchRooms();
+    if (pathname === prevPathnameRef.current) return;
+    prevPathnameRef.current = pathname;
+    void silentRefresh();
+  }, [pathname, silentRefresh]);
+
+  // Listen for chat:history-refresh events dispatched by HistoryRefreshBridge.
+  // The event may carry a detail.roomId so we can immediately move that room to
+  // the top of the list (optimistic update) before the background fetch lands.
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ roomId?: number | null }>).detail;
+      const roomId = detail?.roomId;
+
+      if (roomId) {
+        // Optimistically move the room to the top so the UI reacts instantly.
+        setRooms((prev) => {
+          const idx = prev.findIndex((r) => r.cr_id === roomId);
+          if (idx <= 0) return prev; // already at top or not found yet
+          const room = prev[idx]!;
+          return [room, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        });
+      }
+
+      // Always do a background fetch to get the true server state.
+      void silentRefresh();
     };
 
     window.addEventListener("chat:history-refresh", handler);
     return () => {
       window.removeEventListener("chat:history-refresh", handler);
     };
-  }, [fetchRooms]);
+  }, [silentRefresh]);
 
   const handleCreateRoom = React.useCallback(async () => {
     try {
-      const response = await fetch(`${basePath}/api/chat/rooms`, {
+      const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
         method: "POST",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: null }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to create room: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`Failed to create room: ${response.status}`);
 
       const payload = (await response.json()) as { data?: { cr_id: number } };
       const newRoomId = payload.data?.cr_id;
 
       if (newRoomId) {
-        // push then refresh ensures the app-router fully re-renders
-        // with the new roomId even when already on a /r/* page
         router.push(`/r/${newRoomId}`);
         router.refresh();
-        return;
       }
     } catch (error) {
       console.error("[AppSidebar] Failed to create chat room:", error);
@@ -142,7 +173,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="px-0 flex flex-col items-center gap-1">
-              {isLoading && (
+              {isLoading && rooms.length === 0 && (
                 <div className="w-[297px] h-[54px] px-4 flex items-center text-sm text-slate-400">
                   กำลังโหลดประวัติแชท...
                 </div>
@@ -154,25 +185,36 @@ export function AppSidebar() {
                 </div>
               )}
 
-              {rooms.map((room) => (
-                <SidebarMenuItem key={room.cr_id} className="w-[297px]">
-                  <SidebarMenuButton
-                    asChild
-                    className="w-[297px] h-[54px] flex gap-3 text-slate-700 hover:text-slate-900 hover:bg-slate-100 whitespace-normal text-sm items-center rounded-xl px-4"
-                  >
-                    <Link href={`/r/${room.cr_id}`}>
-                      <Icon
-                        icon="mdi:folder-open-outline"
-                        style={{ fontSize: "24px" }}
-                        className="shrink-0 text-slate-800 hover:bg-slate-100 transition-colors"
-                      />
-                      <span className="line-clamp-2 leading-snug">
-                        {room.preview_title || room.cr_title || "บทสนทนา"}
-                      </span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {rooms.map((room) => {
+                const isActive = room.cr_id === currentRoomId;
+                return (
+                  <SidebarMenuItem key={room.cr_id} className="w-[297px]">
+                    <SidebarMenuButton
+                      asChild
+                      className={[
+                        "w-[297px] h-[54px] flex gap-3 whitespace-normal text-sm items-center rounded-xl px-4 transition-colors",
+                        isActive
+                          ? "bg-slate-100 text-slate-900 font-medium"
+                          : "text-slate-700 hover:text-slate-900 hover:bg-slate-100",
+                      ].join(" ")}
+                    >
+                      <Link href={`/r/${room.cr_id}`}>
+                        <Icon
+                          icon={isActive ? "mdi:folder-open" : "mdi:folder-open-outline"}
+                          style={{ fontSize: "24px" }}
+                          className={[
+                            "shrink-0 transition-colors",
+                            isActive ? "text-blue-500" : "text-slate-800",
+                          ].join(" ")}
+                        />
+                        <span className="line-clamp-2 leading-snug">
+                          {room.preview_title || room.cr_title || "บทสนทนา"}
+                        </span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

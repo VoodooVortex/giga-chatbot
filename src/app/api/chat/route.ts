@@ -8,6 +8,8 @@ import { getApiSession } from "@/lib/auth/session";
 import { orchestrate } from "@/lib/ai/orchestrator";
 import { env } from "@/lib/config";
 import { db } from "@/lib/db";
+export const dynamic = "force-dynamic";
+
 import { chatMessages, chatRooms } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 

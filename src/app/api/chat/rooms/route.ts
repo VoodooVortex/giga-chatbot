@@ -10,6 +10,8 @@ import { chatRooms, chatMessages } from "@/lib/db/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
 
 // GET /api/chat/rooms - List user's chat rooms
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
     try {
         const cookieHeader = req.headers.get("cookie");

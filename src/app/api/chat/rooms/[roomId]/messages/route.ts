@@ -16,6 +16,8 @@ interface RouteParams {
 }
 
 // GET /api/chat/rooms/[roomId]/messages - Get room messages
+export const dynamic = "force-dynamic";
+
 export async function GET(
     req: NextRequest,
     { params }: RouteParams

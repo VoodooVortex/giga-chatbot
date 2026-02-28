@@ -55,7 +55,7 @@ const RoomNavigator = ({
     seen.current = true;
     void (async () => {
       try {
-        const resp = await fetch(`${basePath}/api/chat/rooms`, {
+        const resp = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
           credentials: "include",
         });
         if (!resp.ok) return;
@@ -73,9 +73,19 @@ const RoomNavigator = ({
   return null;
 };
 
-const HistoryRefreshBridge = () => {
+const HistoryRefreshBridge = ({ roomId }: { roomId?: string }) => {
   const thread = useThread();
   const lastLengthRef = React.useRef(0);
+  const roomIdNum = roomId ? Number(roomId) : null;
+
+  const fireRefresh = React.useCallback(() => {
+    // Include roomId so the sidebar can optimistically move the room to top.
+    window.dispatchEvent(
+      new CustomEvent("chat:history-refresh", {
+        detail: { roomId: roomIdNum },
+      }),
+    );
+  }, [roomIdNum]);
 
   React.useEffect(() => {
     const currentLength = thread.messages.length;
@@ -83,17 +93,20 @@ const HistoryRefreshBridge = () => {
 
     lastLengthRef.current = currentLength;
 
-    // Fire immediately when message list grows
-    window.dispatchEvent(new Event("chat:history-refresh"));
+    // Fire immediately: sidebar does an optimistic move-to-top.
+    fireRefresh();
 
-    // Fire again after 2 s — catches cases where the sidebar fetched before the
-    // assistant message was fully committed to the DB (optimistic thread update).
-    const t = setTimeout(() => {
-      window.dispatchEvent(new Event("chat:history-refresh"));
-    }, 2000);
+    // Fire again after 1 s to ensure the server has committed updated_at
+    // before the sidebar fetches the fresh room list.
+    const t1 = setTimeout(fireRefresh, 1000);
+    // One more after 3 s as a safety net for slow AI responses.
+    const t2 = setTimeout(fireRefresh, 3000);
 
-    return () => clearTimeout(t);
-  }, [thread.messages]);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [thread.messages, fireRefresh]);
 
   return null;
 };
@@ -206,6 +219,12 @@ const AssistantInner = ({
   const handleNewRoom = React.useCallback(
     (id: number) => {
       router.replace(`/r/${id}`);
+      // Fire a refresh so the sidebar picks up the newly created room while
+      // the page is navigating (pathname change will also trigger silentRefresh
+      // in AppSidebar, but this fires earlier).
+      window.dispatchEvent(
+        new CustomEvent("chat:history-refresh", { detail: { roomId: null } }),
+      );
     },
     [router],
   );
@@ -222,7 +241,7 @@ const AssistantInner = ({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       {!roomId && <RoomNavigator onNavigate={handleNewRoom} />}
-      <HistoryRefreshBridge />
+      <HistoryRefreshBridge roomId={roomId} />
       <div className="flex flex-col h-full bg-white relative">
         <header className="flex items-center h-[77px] px-4 shrink-0 bg-white z-10 gap-2">
           <Link href="/">
