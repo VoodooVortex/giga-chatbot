@@ -86,35 +86,38 @@ const HistoryRefreshBridge = ({
   const lastLengthRef = React.useRef(initialMessageCount);
   const roomIdNum = roomId ? Number(roomId) : null;
 
-  const fireRefresh = React.useCallback(() => {
-    // Include roomId so the sidebar can optimistically move the room to top.
-    window.dispatchEvent(
-      new CustomEvent("chat:history-refresh", {
-        detail: { roomId: roomIdNum },
-      }),
-    );
-  }, [roomIdNum]);
-
   React.useEffect(() => {
     const currentLength = thread.messages.length;
     if (currentLength <= lastLengthRef.current) return;
 
     lastLengthRef.current = currentLength;
 
-    // Fire immediately: sidebar does an optimistic move-to-top.
-    fireRefresh();
+    // Immediate fire: ONLY optimistic reorder — no server fetch.
+    // The server hasn't committed updated_at yet so fetching now would return
+    // stale order and cause a flicker.
+    window.dispatchEvent(
+      new CustomEvent("chat:history-refresh", {
+        detail: { roomId: roomIdNum, syncFromServer: false },
+      }),
+    );
 
-    // Fire again after 1 s to ensure the server has committed updated_at
-    // before the sidebar fetches the fresh room list.
-    const t1 = setTimeout(fireRefresh, 1000);
-    // One more after 3 s as a safety net for slow AI responses.
-    const t2 = setTimeout(fireRefresh, 3000);
+    // Delayed fires: tell the sidebar to actually fetch from the server.
+    // By 1 s the DB write is guaranteed to have committed.
+    const sync = () =>
+      window.dispatchEvent(
+        new CustomEvent("chat:history-refresh", {
+          detail: { roomId: roomIdNum, syncFromServer: true },
+        }),
+      );
+
+    const t1 = setTimeout(sync, 1000);
+    const t2 = setTimeout(sync, 3000);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [thread.messages, fireRefresh]);
+  }, [thread.messages, roomIdNum]);
 
   return null;
 };

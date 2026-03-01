@@ -88,11 +88,14 @@ export function AppSidebar() {
   }, [pathname, silentRefresh]);
 
   // Listen for chat:history-refresh events dispatched by HistoryRefreshBridge.
-  // The event may carry a detail.roomId so we can immediately move that room to
-  // the top of the list (optimistic update) before the background fetch lands.
+  // detail.syncFromServer=false → optimistic reorder only, no fetch.
+  // detail.syncFromServer=true  → fetch from server (called after 1 s / 3 s
+  //   when updated_at is guaranteed committed).
   React.useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ roomId?: number | null }>).detail;
+      const detail = (
+        e as CustomEvent<{ roomId?: number | null; syncFromServer?: boolean }>
+      ).detail;
       const roomId = detail?.roomId;
 
       if (roomId) {
@@ -105,8 +108,11 @@ export function AppSidebar() {
         });
       }
 
-      // Always do a background fetch to get the true server state.
-      void silentRefresh();
+      // Only fetch from the server when the caller says it's safe to do so
+      // (i.e. the updated_at write has already been committed).
+      if (detail?.syncFromServer !== false) {
+        void silentRefresh();
+      }
     };
 
     window.addEventListener("chat:history-refresh", handler);
