@@ -202,10 +202,7 @@ export function AppSidebar() {
                         <Icon
                           icon={isActive ? "mdi:folder-open" : "mdi:folder-open-outline"}
                           style={{ fontSize: "24px" }}
-                          className={[
-                            "shrink-0 transition-colors",
-                            isActive ? "text-blue-500" : "text-slate-800",
-                          ].join(" ")}
+                          className="shrink-0 text-slate-800 transition-colors"
                         />
                         <span className="line-clamp-2 leading-snug">
                           {room.preview_title || room.cr_title || "บทสนทนา"}

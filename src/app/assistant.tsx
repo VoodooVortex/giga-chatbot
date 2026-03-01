@@ -73,9 +73,17 @@ const RoomNavigator = ({
   return null;
 };
 
-const HistoryRefreshBridge = ({ roomId }: { roomId?: string }) => {
+const HistoryRefreshBridge = ({
+  roomId,
+  initialMessageCount,
+}: {
+  roomId?: string;
+  initialMessageCount: number;
+}) => {
   const thread = useThread();
-  const lastLengthRef = React.useRef(0);
+  // Initialize from the already-loaded history so we only fire when NEW
+  // messages arrive (not when historical messages populate on mount).
+  const lastLengthRef = React.useRef(initialMessageCount);
   const roomIdNum = roomId ? Number(roomId) : null;
 
   const fireRefresh = React.useCallback(() => {
@@ -241,7 +249,7 @@ const AssistantInner = ({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       {!roomId && <RoomNavigator onNavigate={handleNewRoom} />}
-      <HistoryRefreshBridge roomId={roomId} />
+      <HistoryRefreshBridge roomId={roomId} initialMessageCount={initialMessages.length} />
       <div className="flex flex-col h-full bg-white relative">
         <header className="flex items-center h-[77px] px-4 shrink-0 bg-white z-10 gap-2">
           <Link href="/">
