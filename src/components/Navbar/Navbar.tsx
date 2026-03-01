@@ -67,16 +67,19 @@ const Navbar = ({ children }: NavbarProps) => {
 
   /**
    * Description: แปลง/normalize ข้อมูลจาก API ให้อยู่ในรูปแบบที่ใช้เช็ค snapshot ได้เสมอ
-   * Input : itemData (any[])
+   * Input : itemData (unknown[])
    * Output : { id: number, updatedAt: string | null, createdAt: string | null }[]
    * Author : Nontapat Sinhum (Guitar) 66160104
    **/
-  const normalizeCartItemsForSeen = useCallback((itemData: any[]) => {
-    return (itemData ?? []).map((i: any) => ({
-      id: i.cti_id,
-      updatedAt: i.updated_at ?? i.cti_updated_at ?? null,
-      createdAt: i.created_at ?? i.cti_created_at ?? null,
-    }));
+  const normalizeCartItemsForSeen = useCallback((itemData: unknown[]) => {
+    return (itemData ?? []).map((i: unknown) => {
+      const item = i as Record<string, unknown>;
+      return {
+        id: item.cti_id as number,
+        updatedAt: (item.updated_at ?? item.cti_updated_at ?? null) as string | null,
+        createdAt: (item.created_at ?? item.cti_created_at ?? null) as string | null,
+      };
+    });
   }, []);
 
   const MIN_CART_CHECK_MS = 2500;

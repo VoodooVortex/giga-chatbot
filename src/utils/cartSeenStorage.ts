@@ -30,8 +30,9 @@ export function getSeenCartSnapshot(userId: number): CartSeenSnapshotV2 {
     if (
       parsed &&
       typeof parsed === "object" &&
-      (parsed as any).map &&
-      typeof (parsed as any).map === "object"
+      "map" in parsed &&
+      parsed.map &&
+      typeof parsed.map === "object"
     ) {
       return parsed as CartSeenSnapshotV2;
     }

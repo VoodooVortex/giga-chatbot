@@ -101,7 +101,7 @@ export type CartItem = {
     created_at?: string | null;
     updated_at?: string | null;
 
-    device: any | null;
+    device: Record<string, unknown> | null;
     de_ca_name: string | null;
     de_acc_name: string | null;
     de_dept_name: string | null;
@@ -172,13 +172,13 @@ export const CartService = {
     /**
     * Description: สร้าง Borrow Ticket จากรายการในตะกร้า
     * Input : payload: { cartItemId: number }
-    * Output : Promise<any> = ข้อมูลผลลัพธ์ที่ backend ส่งกลับ (ตามที่ backend กำหนด)
+    * Output : Promise<unknown> = ข้อมูลผลลัพธ์ที่ backend ส่งกลับ (ตามที่ backend กำหนด)
     * Author : Nontapat Sinhum (Guitar) 66160104
     **/
     async createBorrowTicket(
         payload: CreateBorrowTicketPayload
-    ): Promise<any> {
-        const res = await apiFetch<ApiEnvelope<any>>(
+    ): Promise<unknown> {
+        const res = await apiFetch<ApiEnvelope<unknown>>(
             `/borrow/cart/`,
             { method: "POST", body: JSON.stringify(payload) },
         );

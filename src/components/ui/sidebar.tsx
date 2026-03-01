@@ -41,10 +41,10 @@ export const SidebarMenuButton = React.forwardRef<HTMLButtonElement | HTMLAnchor
   const mergedClassName = `w-full px-4 rounded-md outline-none transition-colors ${className || ""}`;
 
   if (asChild && React.isValidElement(children)) {
-    const childElement = children as React.ReactElement<any>;
+    const childElement = children as React.ReactElement<Record<string, unknown>>;
     const childDefaultProps = childElement.props;
-    const ChildNode: any = childElement.type;
-    return <ChildNode {...childDefaultProps} {...rest} ref={ref} className={`${childDefaultProps.className || ""} ${mergedClassName}`}>{childDefaultProps.children}</ChildNode>;
+    const ChildNode = childElement.type as React.ComponentType<Record<string, unknown>>;
+    return <ChildNode {...childDefaultProps} {...rest} ref={ref} className={`${(childDefaultProps.className as string) || ""} ${mergedClassName}`}>{childDefaultProps.children as React.ReactNode}</ChildNode>;
   }
   return (
     <button ref={ref as React.Ref<HTMLButtonElement>} className={mergedClassName} {...rest}>

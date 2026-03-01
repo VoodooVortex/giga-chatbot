@@ -10,9 +10,10 @@ import { z } from "zod";
 if (process.env.NODE_ENV !== "production") {
     try {
         // Dynamic import to avoid Edge Runtime issues
-        const dotenv = require("dotenv");
-        dotenv.config({ path: ".env.local" });
-        dotenv.config({ path: ".env" });
+        void import("dotenv").then((dotenv) => {
+            dotenv.config({ path: ".env.local" });
+            dotenv.config({ path: ".env" });
+        });
     } catch {
         // Silent fail in Edge Runtime
     }
