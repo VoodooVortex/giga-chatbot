@@ -8,7 +8,6 @@ import {
 import { Thread } from "@/components/assistant-ui/thread";
 import { Icon } from "@iconify/react";
 import { Button } from "@/components/ui/button";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import type { UIMessage } from "ai";
@@ -255,19 +254,18 @@ const AssistantInner = ({
       <HistoryRefreshBridge roomId={roomId} initialMessageCount={initialMessages.length} />
       <div className="flex flex-col h-full bg-white relative">
         <header className="flex items-center h-[77px] px-4 shrink-0 bg-white z-10 gap-2">
-          <Link href="/">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-slate-500 hover:text-slate-700 hover:bg-slate-100 shrink-0 rounded-full w-9 h-9 p-0 transition-colors"
-            >
-              <Icon
-                icon="ep:arrow-left-bold"
-                style={{ fontSize: "24px" }}
-                className="text-slate-500 hover:text-slate-700 hover:bg-slate-100 shrink-0 transition-colors"
-              />
-            </Button>
-          </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => router.back()}
+            className="text-slate-500 hover:text-slate-700 hover:bg-slate-100 shrink-0 rounded-full w-9 h-9 p-0 transition-colors"
+          >
+            <Icon
+              icon="ep:arrow-left-bold"
+              style={{ fontSize: "24px" }}
+              className="text-slate-500 hover:text-slate-700 shrink-0 transition-colors"
+            />
+          </Button>
 
           <div className="flex items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -4,10 +4,13 @@ import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import Navbar from "@/components/Navbar/Navbar";
 
 const roboto = Roboto({
   variable: "--font-roboto",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "700"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -24,12 +27,14 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${roboto.variable} antialiased`}>
         <TooltipProvider>
-          <SidebarProvider>
-            <main className="flex h-screen w-full overflow-hidden bg-white">
-              {children}
-              <AppSidebar />
-            </main>
-          </SidebarProvider>
+          <Navbar>
+            <SidebarProvider>
+              <div className="flex h-[calc(100vh-100px)] w-full overflow-hidden bg-white">
+                {children}
+                <AppSidebar />
+              </div>
+            </SidebarProvider>
+          </Navbar>
         </TooltipProvider>
       </body>
     </html>

@@ -46,7 +46,7 @@ export const Thread: FC = () => {
         className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-auto scroll-smooth px-4 pt-4"
         style={{
           background:
-            "radial-gradient(ellipse at 50% 45%, rgba(186,220,255,0.50) 0%, rgba(214,234,255,0.25) 45%, rgba(255,255,255,0) 80%)",
+            "radial-gradient(ellipse 55% 40% at 50% 20%, rgba(186,220,255,0.22) 0%, rgba(214,234,255,0.08) 55%, rgba(255,255,255,0) 75%)",
         }}
       >
         <AuiIf condition={(s) => s.thread.isEmpty}>
