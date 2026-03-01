@@ -59,22 +59,22 @@ run_migration_psql() {
     fi
 }
 
-# Function to run migration with docker compose
-run_migration_compose() {
+# Function to run migration with docker exec (database container)
+run_migration_docker() {
     local migration_file=$1
-    local filename=$(basename "$migration_file")
+    local db_container=$2
     
-    # Try to use docker compose exec with chatbot service
-    # This assumes the chatbot service is running and has psql
-    if docker compose ps | grep -q "chatbot"; then
-        echo -e "${YELLOW}Using docker compose exec...${NC}"
-        # Copy file to container and execute
-        docker cp "$migration_file" "giga-chatbot:/tmp/$filename"
-        docker compose exec -T chatbot sh -c "psql \"\$DATABASE_URL\" -f /tmp/$filename"
-        docker compose exec chatbot rm "/tmp/$filename"
+    echo -e "${YELLOW}Using docker exec with database container: $db_container${NC}"
+    
+    if docker ps | grep -q "$db_container"; then
+        # Extract database name from DATABASE_URL
+        DB_NAME=$(echo "$DATABASE_URL" | sed -n 's/.*\/\([^\/]*\)$/\1/p')
+        DB_USER=$(echo "$DATABASE_URL" | sed -n 's/.*:\/\/\([^:]*\):.*/\1/p')
+        
+        docker exec -i "$db_container" psql -U "${DB_USER:-404}" -d "${DB_NAME:-orbis_track}" < "$migration_file"
     else
-        echo -e "${RED}Error: chatbot service is not running${NC}"
-        echo "Please start the services first: docker compose up -d"
+        echo -e "${RED}Error: Database container $db_container not found${NC}"
+        echo "Please ensure the database container is running."
         exit 1
     fi
 }
@@ -84,8 +84,9 @@ for migration in $(ls -1 $MIGRATIONS_DIR/*.sql | sort); do
     echo -e "${YELLOW}Applying migration: $(basename $migration)${NC}"
     
     if [ "$IS_DOCKER_HOST" = true ]; then
-        # Use docker compose if host is a Docker container
-        run_migration_compose "$migration"
+        # Use docker exec with the database container
+        DB_CONTAINER=$(echo "$DB_HOST" | sed 's/:.*//')
+        run_migration_docker "$migration" "$DB_CONTAINER"
     else
         # Use local psql
         run_migration_psql "$migration"
