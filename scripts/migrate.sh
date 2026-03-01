@@ -2,6 +2,7 @@
 #
 # Database Migration Script
 # Run database migrations using psql for raw SQL files
+# Supports: local psql, docker psql, or docker compose exec
 
 set -e
 
@@ -29,6 +30,16 @@ if [ -z "$DATABASE_URL" ]; then
     exit 1
 fi
 
+# Extract host from DATABASE_URL
+DB_HOST=$(echo "$DATABASE_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
+echo -e "${YELLOW}Database host: $DB_HOST${NC}"
+
+# Check if it's a Docker container hostname (contains '-')
+IS_DOCKER_HOST=false
+if [[ "$DB_HOST" == *-* ]] && [[ "$DB_HOST" != "localhost" ]] && [[ "$DB_HOST" != "127.0.0.1" ]]; then
+    IS_DOCKER_HOST=true
+fi
+
 # Run SQL migrations in order
 MIGRATIONS_DIR="infra/db/migrations"
 
@@ -37,22 +48,47 @@ if [ ! -d "$MIGRATIONS_DIR" ]; then
     exit 1
 fi
 
+# Function to run migration with psql
+run_migration_psql() {
+    local migration_file=$1
+    if command -v psql &> /dev/null; then
+        psql "$DATABASE_URL" -f "$migration_file"
+    else
+        echo -e "${RED}Error: psql not found${NC}"
+        exit 1
+    fi
+}
+
+# Function to run migration with docker compose
+run_migration_compose() {
+    local migration_file=$1
+    local filename=$(basename "$migration_file")
+    
+    # Try to use docker compose exec with chatbot service
+    # This assumes the chatbot service is running and has psql
+    if docker compose ps | grep -q "chatbot"; then
+        echo -e "${YELLOW}Using docker compose exec...${NC}"
+        # Copy file to container and execute
+        docker cp "$migration_file" "giga-chatbot:/tmp/$filename"
+        docker compose exec -T chatbot sh -c "psql \"\$DATABASE_URL\" -f /tmp/$filename"
+        docker compose exec chatbot rm "/tmp/$filename"
+    else
+        echo -e "${RED}Error: chatbot service is not running${NC}"
+        echo "Please start the services first: docker compose up -d"
+        exit 1
+    fi
+}
+
 # Run each SQL file in order
 for migration in $(ls -1 $MIGRATIONS_DIR/*.sql | sort); do
     echo -e "${YELLOW}Applying migration: $(basename $migration)${NC}"
     
-    if command -v psql &> /dev/null; then
-        # Run with psql locally
-        psql "$DATABASE_URL" -f "$migration"
-    elif command -v docker &> /dev/null; then
-        # Run with psql in Docker
-        docker run --rm -i \
-            -e PGPASSWORD=$(echo "$DATABASE_URL" | sed -n 's/.*:\([^@]*\)@.*/\1/p') \
-            postgres:16-alpine \
-            psql "$DATABASE_URL" < "$migration"
+    if [ "$IS_DOCKER_HOST" = true ]; then
+        # Use docker compose if host is a Docker container
+        run_migration_compose "$migration"
     else
-        echo -e "${RED}Error: psql or docker is required to run migrations${NC}"
-        exit 1
+        # Use local psql
+        run_migration_psql "$migration"
     fi
     
     echo -e "${GREEN}✓ Applied: $(basename $migration)${NC}"
