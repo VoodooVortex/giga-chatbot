@@ -31,7 +31,8 @@ if [ -z "$DATABASE_URL" ]; then
 fi
 
 # Extract host from DATABASE_URL
-DB_HOST=$(echo "$DATABASE_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
+# Pattern: stop at : (port) or / (database name)
+DB_HOST=$(echo "$DATABASE_URL" | sed -n 's/.*@\([^:/]*\).*/\1/p')
 echo -e "${YELLOW}Database host: $DB_HOST${NC}"
 
 # Check if it's a Docker container hostname (contains '-')
