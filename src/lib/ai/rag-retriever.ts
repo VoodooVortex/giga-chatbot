@@ -108,14 +108,14 @@ export async function retrieveRAGContext(
 
     // Build the SQL query with vector similarity search
     let query_sql = sql`
-    SELECT 
+    SELECT
       re_id,
       re_source_table,
       re_source_id,
       re_content,
       re_metadata,
       1 - (re_embedding <=> ${embeddingString}::vector) as similarity
-    FROM rag_embeddings
+    FROM rag.embeddings
     WHERE 1 - (re_embedding <=> ${embeddingString}::vector) >= ${minSimilarity}
   `;
 
@@ -162,14 +162,14 @@ export async function retrieveHybridContext(
     // Build keyword search query
     const keywordPattern = keywords.join(" | ");
     const keywordResults = await db.execute(sql`
-    SELECT 
+    SELECT
       re_id,
       re_source_table,
       re_source_id,
       re_content,
       re_metadata,
       ts_rank(to_tsvector('english', re_content), to_tsquery(${keywordPattern})) as rank
-    FROM rag_embeddings
+    FROM rag.embeddings
     WHERE to_tsvector('english', re_content) @@ to_tsquery(${keywordPattern})
     ORDER BY rank DESC
     LIMIT ${topK}
