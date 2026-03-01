@@ -95,3 +95,57 @@ for migration in $(ls -1 $MIGRATIONS_DIR/*.sql | sort); do
 done
 
 echo -e "${GREEN}All migrations complete!${NC}"
+
+# ============================================================================
+# Initial RAG Indexing (Trigger worker to process existing data)
+# ============================================================================
+echo ""
+echo -e "${YELLOW}Triggering RAG re-index for existing data...${NC}"
+echo -e "${YELLOW}This will notify the RAG worker to create embeddings for existing records.${NC}"
+
+# SQL to trigger re-index by updating timestamps
+rag_sql=$(cat << 'EOF'
+-- Trigger RAG re-index for existing devices
+UPDATE devices SET updated_at = NOW()
+WHERE de_id IN (SELECT de_id FROM devices);
+
+-- Trigger RAG re-index for existing ticket issues
+UPDATE ticket_issues SET updated_at = NOW()
+WHERE ti_id IN (SELECT ti_id FROM ticket_issues);
+EOF
+)
+
+# Run RAG re-index SQL
+if [ "$IS_DOCKER_HOST" = true ]; then
+    # Use docker exec with the database container
+    # Extract database container name from DB_HOST (remove port if exists)
+    DB_CONTAINER=$(echo "$DB_HOST" | sed 's/:.*//')
+    echo -e "${YELLOW}Using database container: $DB_CONTAINER${NC}"
+    
+    if docker ps | grep -q "$DB_CONTAINER"; then
+        echo "$rag_sql" | docker exec -i "$DB_CONTAINER" psql -U 404 -d orbis_track
+        echo -e "${GREEN}✓ RAG re-index triggered!${NC}"
+    else
+        echo -e "${RED}Warning: Database container $DB_CONTAINER not found${NC}"
+        echo "Please ensure the database container is running."
+    fi
+else
+    # Use local psql
+    if command -v psql &> /dev/null; then
+        echo "$rag_sql" | psql "$DATABASE_URL"
+        echo -e "${GREEN}✓ RAG re-index triggered!${NC}"
+    else
+        echo -e "${RED}Warning: psql not found, skipping RAG re-index${NC}"
+    fi
+fi
+
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}Setup complete!${NC}"
+echo -e "${GREEN}========================================${NC}"
+echo ""
+echo "Next steps:"
+echo "  1. Ensure RAG Worker is running: docker compose up -d worker"
+echo "  2. Worker will process embeddings asynchronously"
+echo "  3. Check worker logs: docker compose logs -f worker"
+echo ""
