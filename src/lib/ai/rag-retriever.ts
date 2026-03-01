@@ -15,9 +15,8 @@ const queryEmbeddingCache = new Map<string, { embedding: number[]; expiresAt: nu
 interface EmbeddingResult {
     re_id: number;
     re_source_table: string;
-    re_source_id: string;
+    re_source_pk: string;
     re_content: string;
-    re_metadata: Record<string, unknown>;
     similarity: number;
 }
 
@@ -111,9 +110,8 @@ export async function retrieveRAGContext(
     SELECT
       re_id,
       re_source_table,
-      re_source_id,
+      re_source_pk,
       re_content,
-      re_metadata,
       1 - (re_embedding <=> ${embeddingString}::vector) as similarity
     FROM rag.embeddings
     WHERE 1 - (re_embedding <=> ${embeddingString}::vector) >= ${minSimilarity}
@@ -131,7 +129,7 @@ export async function retrieveRAGContext(
 
     return results.map(r => ({
         content: r.re_content,
-        source: `${r.re_source_table}:${r.re_source_id}`,
+        source: `${r.re_source_table}:${r.re_source_pk}`,
         similarity: r.similarity,
     }));
 }
@@ -165,9 +163,8 @@ export async function retrieveHybridContext(
     SELECT
       re_id,
       re_source_table,
-      re_source_id,
+      re_source_pk,
       re_content,
-      re_metadata,
       ts_rank(to_tsvector('english', re_content), to_tsquery(${keywordPattern})) as rank
     FROM rag.embeddings
     WHERE to_tsvector('english', re_content) @@ to_tsquery(${keywordPattern})
@@ -176,7 +173,7 @@ export async function retrieveHybridContext(
   `) as unknown as Array<{
         re_id: number;
         re_source_table: string;
-        re_source_id: string;
+        re_source_pk: string;
         re_content: string;
         rank: number;
     }>;
@@ -200,7 +197,7 @@ export async function retrieveHybridContext(
             seen.add(r.re_id);
             combined.push({
                 content: r.re_content,
-                source: `${r.re_source_table}:${r.re_source_id}`,
+                source: `${r.re_source_table}:${r.re_source_pk}`,
                 similarity: r.rank, // Use rank as similarity score
             });
         }
