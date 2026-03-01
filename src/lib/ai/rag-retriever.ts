@@ -125,9 +125,9 @@ export async function retrieveRAGContext(
     // Order by similarity and limit results
     query_sql = sql`${query_sql} ORDER BY similarity DESC LIMIT ${topK}`;
 
-    const results = await db.execute(query_sql) as unknown as EmbeddingResult[];
+    const result = await db.execute(query_sql) as unknown as { rows: EmbeddingResult[] };
 
-    return results.map(r => ({
+    return result.rows.map(r => ({
         content: r.re_content,
         source: `${r.re_source_table}:${r.re_source_pk}`,
         similarity: r.similarity,
@@ -159,7 +159,7 @@ export async function retrieveHybridContext(
 
     // Build keyword search query
     const keywordPattern = keywords.join(" | ");
-    const keywordResults = await db.execute(sql`
+    const keywordResult = await db.execute(sql`
     SELECT
       re_id,
       re_source_table,
@@ -170,13 +170,16 @@ export async function retrieveHybridContext(
     WHERE to_tsvector('english', re_content) @@ to_tsquery(${keywordPattern})
     ORDER BY rank DESC
     LIMIT ${topK}
-  `) as unknown as Array<{
-        re_id: number;
-        re_source_table: string;
-        re_source_pk: string;
-        re_content: string;
-        rank: number;
-    }>;
+  `) as unknown as {
+        rows: Array<{
+            re_id: number;
+            re_source_table: string;
+            re_source_pk: string;
+            re_content: string;
+            rank: number;
+        }>
+    };
+    const keywordResults = keywordResult.rows;
 
     // Combine and deduplicate results
     const seen = new Set<number>();
