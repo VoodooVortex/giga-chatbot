@@ -151,7 +151,7 @@ Summarize notification content briefly.`,
         general_question: `
 You are answering general IT questions using the knowledge base.
 Provide accurate, helpful information with citations to the source documents.
-If the answer isn't in the knowledge base, suggest contacting IT support.`
+If the answer isn't in the knowledge base, do not blindly apologize. Instead, politely clarify what the user means (e.g. asking if they are looking for an Asset ID, Ticket ID, or if it is a general question). If it is completely out of scope, then suggest contacting IT.`
     };
 
     return basePrompt + (intentSpecificPrompts[intent] || "");

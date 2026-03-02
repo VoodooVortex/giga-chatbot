@@ -12,8 +12,8 @@ const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_CHAT);
 const INTENT_PROMPT = `You are an intent classifier for an IT asset management chatbot.
 Analyze the user query and classify it into one of these intents:
 
-1. "device_lookup" - User wants to find/search devices, assets, or inventory
-   Examples: "หาเครื่องคอมที่ห้อง 101", "Device ที่ assign ให้ใคร", "ค้นหา Asset TAG123"
+1. "device_lookup" - User wants to find/search devices, assets, or inventory (including questions about "รหัส" or asset tags in general if not specified as password)
+   Examples: "หาเครื่องคอมที่ห้อง 101", "Device ที่ assign ให้ใคร", "ค้นหา Asset TAG123", "มีรหัสอะไรบ้าง"
 
 2. "ticket_lookup" - User wants to find/search tickets, issues, or problems
    Examples: "ticket ล่าสุด", "ปัญหาที่ยังไม่เสร็จ", "ดู issue ของ device นี้"
@@ -21,8 +21,8 @@ Analyze the user query and classify it into one of these intents:
 3. "notification_check" - User wants to check notifications or alerts
    Examples: "มีแจ้งเตือนไหม", "notification ล่าสุด", "อ่านการแจ้งเตือนทั้งหมด"
 
-4. "general_question" - General IT questions that need RAG knowledge base
-   Examples: "วิธี reset password", "policy การใช้งาน", "ขั้นตอนการเบิกอุปกรณ์"
+4. "general_question" - General IT questions that need RAG knowledge base (like passwords, policies)
+   Examples: "วิธี reset password", "ลืมรหัสผ่านทำไง", "policy การใช้งาน", "ขั้นตอนการเบิกอุปกรณ์"
 
 Respond ONLY in JSON format:
 {
@@ -133,7 +133,7 @@ function classifyIntentHeuristic(query: string): ClassifiedIntent {
 
     const hasNotification = /แจ้งเตือน|notification|alert/i.test(normalized);
     const hasTicket = /ticket|issue|ปัญหา|งานซ่อม|incident|request/i.test(normalized);
-    const hasDevice = /device|asset|อุปกรณ์|คอม|โน้ตบุ๊ก|โน้ตบุค|laptop|pc|tag|serial/i.test(normalized);
+    const hasDevice = /device|asset|อุปกรณ์|คอม|โน้ตบุ๊ก|โน้ตบุค|laptop|pc|tag|serial|(?<!ลืม)(รหัส)(?!ผ่าน)/i.test(normalized);
 
     if (hasNotification) {
         return {
