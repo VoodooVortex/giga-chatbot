@@ -245,6 +245,7 @@ const AssistantInner = ({
       api: roomId
         ? `${basePath}/api/chat/rooms/${roomId}`
         : `${basePath}/api/chat`,
+      credentials: "include",
     }),
   });
 
