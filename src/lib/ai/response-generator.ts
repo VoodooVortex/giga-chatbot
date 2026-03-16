@@ -22,6 +22,7 @@ export async function generateResponse(options: GenerateResponseOptions): Promis
 
     // Build system prompt based on intent
     const systemPrompt = buildSystemPrompt(intent);
+    const listInstruction = buildListInstruction(query);
 
     // Build context from RAG and tool results
     const contextPrompt = buildContextPrompt(ragContexts, toolResults);
@@ -30,6 +31,7 @@ export async function generateResponse(options: GenerateResponseOptions): Promis
     const historyPrompt = buildHistoryPrompt(conversationHistory);
 
     const fullPrompt = `${systemPrompt}
+${listInstruction}
 
 ${contextPrompt}
 
@@ -44,6 +46,14 @@ Response:`;
     }
 
     return generateWithGoogle(fullPrompt);
+}
+
+function buildListInstruction(query: string): string {
+    if (!/(ทั้งหมด|รายการทั้งหมด|ลิสต์|list all|show all|ทั้งหมด|แสดงทั้งหมด|all devices|all items)/i.test(query)) {
+        return "";
+    }
+
+    return `User requested the full list. You MUST list every item from System Data without truncation, no summaries, and no ellipsis. If there are no items, state that clearly.`;
 }
 
 async function generateWithGoogle(fullPrompt: string): Promise<string> {
@@ -227,7 +237,9 @@ export function formatToolResultsForDisplay(toolResults: ToolCall[]): string {
                 } else {
                     parts.push(`📦 Found ${devices.length} device(s):`);
                     devices.slice(0, 5).forEach((d: Record<string, unknown>) => {
-                        parts.push(`  • ${d.name || d.assetTag || "Unknown"} (${d.status || "Unknown status"})`);
+                        const name = d.de_name || d.name || d.assetTag || "Unknown";
+                        const location = d.de_location || d.location || "N/A";
+                        parts.push(`  • ${name} (Location: ${location})`);
                     });
                     if (devices.length > 5) {
                         parts.push(`  ... and ${devices.length - 5} more`);
@@ -241,22 +253,26 @@ export function formatToolResultsForDisplay(toolResults: ToolCall[]): string {
                     parts.push("📦 Device not found.");
                 } else {
                     const d = result as Record<string, unknown>;
-                    parts.push(`📦 Device: ${d.name || d.assetTag}`);
-                    parts.push(`   Status: ${d.status}`);
-                    parts.push(`   Location: ${d.location || "N/A"}`);
-                    parts.push(`   Assigned to: ${d.assignedTo || "Unassigned"}`);
+                    parts.push(`📦 Device: ${d.de_name || d.name || d.assetTag}`);
+                    parts.push(`   Serial: ${d.de_serial_number || d.serial || "N/A"}`);
+                    parts.push(`   Location: ${d.de_location || d.location || "N/A"}`);
+                    parts.push(`   Description: ${d.de_description || d.description || "N/A"}`);
                 }
                 break;
             }
 
-            case "search_tickets": {
+            case "search_tickets":
+            case "search_issues": {
                 const tickets = Array.isArray(result) ? result : [];
                 if (tickets.length === 0) {
                     parts.push("🎫 No tickets found matching your criteria.");
                 } else {
                     parts.push(`🎫 Found ${tickets.length} ticket(s):`);
                     tickets.slice(0, 5).forEach((t: Record<string, unknown>) => {
-                        parts.push(`  • #${t.id}: ${t.title || t.subject} (${t.status || "Unknown"})`);
+                        const id = t.ti_id || t.id || "N/A";
+                        const title = t.ti_title || t.title || t.subject || "Untitled";
+                        const status = t.ti_status || t.status || "Unknown";
+                        parts.push(`  • #${id}: ${title} (${status})`);
                     });
                     if (tickets.length > 5) {
                         parts.push(`  ... and ${tickets.length - 5} more`);
@@ -267,11 +283,78 @@ export function formatToolResultsForDisplay(toolResults: ToolCall[]): string {
 
             case "get_notifications": {
                 const notifications = Array.isArray(result) ? result : [];
-                const unread = notifications.filter((n: Record<string, unknown>) => !n.isRead);
+                const unread = notifications.filter((n: Record<string, unknown>) => {
+                    if ("nr_status" in n) return n.nr_status === "UNREAD";
+                    if ("read_at" in n) return !n.read_at;
+                    return !(n as { isRead?: boolean }).isRead;
+                });
                 if (notifications.length === 0) {
                     parts.push("🔔 No notifications.");
                 } else {
                     parts.push(`🔔 ${unread.length} unread of ${notifications.length} total notifications`);
+                }
+                break;
+            }
+
+            case "list_devices_with_availability": {
+                const devices = Array.isArray(result) ? result : [];
+                if (devices.length === 0) {
+                    parts.push("📦 No available devices found.");
+                } else {
+                    parts.push(`📦 Available devices: ${devices.length} item(s)`);
+                    devices.slice(0, 5).forEach((d: Record<string, unknown>) => {
+                        const name = d.de_name || d.name || "Unknown";
+                        const available = d.available ?? "N/A";
+                        const total = d.total ?? "N/A";
+                        parts.push(`  • ${name} (Ready: ${available}/${total})`);
+                    });
+                    if (devices.length > 5) {
+                        parts.push(`  ... and ${devices.length - 5} more`);
+                    }
+                }
+                break;
+            }
+
+            case "get_device_borrow_summary": {
+                if (!result) {
+                    parts.push("📦 Device summary not found.");
+                } else {
+                    const d = result as Record<string, unknown>;
+                    parts.push(`📦 ${d.de_name || d.name || "Device"}: Ready ${d.ready ?? "?"}/${d.total ?? "?"}`);
+                }
+                break;
+            }
+
+            case "get_device_children_availability": {
+                const children = Array.isArray(result) ? result : [];
+                const readyCount = children.filter((c: Record<string, unknown>) => c.dec_status === "READY").length;
+                parts.push(`📦 Device children: ${children.length} total, ${readyCount} ready`);
+                break;
+            }
+
+            case "get_device_available_for_ticket": {
+                const children = Array.isArray(result) ? result : [];
+                parts.push(`📦 Available for selected dates: ${children.length} device(s)`);
+                break;
+            }
+
+            case "find_device_child_by_asset_code": {
+                const payload = result as { asset_code?: string; matches?: Array<Record<string, unknown>> };
+                const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+                if (matches.length === 0) {
+                    parts.push(`📦 No device child found for asset code ${payload?.asset_code || ""}.`);
+                } else {
+                    const first = matches[0] as Record<string, unknown>;
+                    const device = first.device as Record<string, unknown> | undefined;
+                    const child = first.child as Record<string, unknown> | undefined;
+                    const available = first.available === true ? "READY" : "NOT READY";
+                    parts.push(`📦 Asset: ${payload.asset_code}`);
+                    if (device) {
+                        parts.push(`   Device: ${device.de_name || device.name || "Unknown"} (ID: ${device.de_id ?? "N/A"})`);
+                    }
+                    if (child) {
+                        parts.push(`   Child: ${child.dec_asset_code || "N/A"} (Status: ${child.dec_status || "N/A"}, ${available})`);
+                    }
                 }
                 break;
             }

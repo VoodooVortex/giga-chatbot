@@ -6,7 +6,11 @@
 import {
     getDevices,
     getDevice,
+    getBorrowAvailableDeviceChildren,
+    getBorrowDeviceSummary,
+    getBorrowInventory,
     getIssues,
+    getTicketDeviceAvailableChildren,
     getNotifications,
     markNotificationsAsRead
 } from "@/lib/api-client";
@@ -44,6 +48,100 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                 }
             },
             required: ["device_id"]
+        }
+    },
+    {
+        name: "list_devices_with_availability",
+        description: "List devices with availability counts (ready/total). Use when user asks for available devices.",
+        parameters: {
+            type: "object",
+            properties: {
+                search: {
+                    type: "string",
+                    description: "Optional search term to filter device name, serial, location, or category"
+                },
+                limit: {
+                    type: "number",
+                    description: "Maximum number of results to return (default: all)"
+                },
+                only_available: {
+                    type: "boolean",
+                    description: "Return only devices with available > 0"
+                }
+            },
+            required: []
+        }
+    },
+    {
+        name: "get_device_borrow_summary",
+        description: "Get device summary for borrowing, including ready/total counts.",
+        parameters: {
+            type: "object",
+            properties: {
+                device_id: {
+                    type: "number",
+                    description: "Device ID (numeric)"
+                }
+            },
+            required: ["device_id"]
+        }
+    },
+    {
+        name: "get_device_children_availability",
+        description: "Get device child availability (current status + active borrow windows).",
+        parameters: {
+            type: "object",
+            properties: {
+                device_id: {
+                    type: "number",
+                    description: "Device ID (numeric)"
+                }
+            },
+            required: ["device_id"]
+        }
+    },
+    {
+        name: "get_device_available_for_ticket",
+        description: "Get device child availability for a date range (ticket context).",
+        parameters: {
+            type: "object",
+            properties: {
+                device_id: {
+                    type: "number",
+                    description: "Device ID (numeric)"
+                },
+                device_child_ids: {
+                    type: "array",
+                    description: "Optional list of device child IDs"
+                },
+                start_date: {
+                    type: "string",
+                    description: "Start date (YYYY-MM-DD)"
+                },
+                end_date: {
+                    type: "string",
+                    description: "End date (YYYY-MM-DD)"
+                }
+            },
+            required: ["device_id", "start_date", "end_date"]
+        }
+    },
+    {
+        name: "find_device_child_by_asset_code",
+        description: "Find a device child by asset code across all devices.",
+        parameters: {
+            type: "object",
+            properties: {
+                asset_code: {
+                    type: "string",
+                    description: "Asset code to search for (e.g., ASSET-LAP-DELL-001)"
+                },
+                max_devices: {
+                    type: "number",
+                    description: "Maximum number of devices to scan (safety cap)"
+                }
+            },
+            required: ["asset_code"]
         }
     },
     {
@@ -128,6 +226,118 @@ export async function executeTool(
             return await getDevice(device_id, cookie);
         }
 
+        case "list_devices_with_availability": {
+            const { search, limit, only_available } = params as {
+                search?: string;
+                limit?: number;
+                only_available?: boolean;
+            };
+            let result = await getBorrowInventory(cookie);
+
+            if (only_available) {
+                result = result.filter((d) => (d.available ?? 0) > 0);
+            }
+
+            if (search && search.trim()) {
+                const term = search.toLowerCase();
+                result = result.filter((d) => {
+                    const haystack = [
+                        d.de_name,
+                        d.de_serial_number,
+                        d.de_location,
+                        d.category,
+                        d.department ?? "",
+                        d.sub_section ?? "",
+                    ]
+                        .join(" ")
+                        .toLowerCase();
+                    return haystack.includes(term);
+                });
+            }
+
+            if (typeof limit === "number" && limit > 0) {
+                result = result.slice(0, limit);
+            }
+
+            return result;
+        }
+
+        case "get_device_borrow_summary": {
+            const { device_id } = params as { device_id: number };
+            return await getBorrowDeviceSummary(device_id, cookie);
+        }
+
+        case "get_device_children_availability": {
+            const { device_id } = params as { device_id: number };
+            return await getBorrowAvailableDeviceChildren(device_id, cookie);
+        }
+
+        case "get_device_available_for_ticket": {
+            const { device_id, device_child_ids, start_date, end_date } = params as {
+                device_id: number;
+                device_child_ids?: number[];
+                start_date: string;
+                end_date: string;
+            };
+            return await getTicketDeviceAvailableChildren(
+                {
+                    deviceId: device_id,
+                    deviceChildIds: device_child_ids,
+                    startDate: start_date,
+                    endDate: end_date,
+                },
+                cookie
+            );
+        }
+
+        case "find_device_child_by_asset_code": {
+            const { asset_code, max_devices } = params as { asset_code: string; max_devices?: number };
+            if (!asset_code || !asset_code.trim()) {
+                throw new Error("asset_code is required");
+            }
+
+            const target = asset_code.trim().toUpperCase();
+            const devices = await getBorrowInventory(cookie);
+
+            const cap =
+                typeof max_devices === "number" && max_devices > 0
+                    ? Math.floor(max_devices)
+                    : devices.length;
+            const scanList = devices.slice(0, cap);
+
+            for (let i = 0; i < scanList.length; i++) {
+                const device = scanList[i];
+                const children = await getBorrowAvailableDeviceChildren(device.de_id, cookie);
+                const match = children.find(
+                    (child) => (child.dec_asset_code || "").toUpperCase() === target
+                );
+
+                if (match) {
+                    const isReady = match.dec_status === "READY";
+                    const hasActiveBorrow = Array.isArray(match.activeBorrow) && match.activeBorrow.length > 0;
+                    return {
+                        asset_code: target,
+                        matches: [
+                            {
+                                device,
+                                child: match,
+                                available: isReady && !hasActiveBorrow,
+                            },
+                        ],
+                        scanned: i + 1,
+                        truncated: scanList.length < devices.length,
+                    };
+                }
+            }
+
+            return {
+                asset_code: target,
+                matches: [],
+                scanned: scanList.length,
+                truncated: scanList.length < devices.length,
+            };
+        }
+
         case "search_issues": {
             const { status, de_id, q, limit } = params as {
                 status?: "PENDING" | "IN_PROGRESS" | "COMPLETED";
@@ -144,10 +354,37 @@ export async function executeTool(
             return result.data;
         }
 
+        case "search_tickets": {
+            // Alias for search_issues (legacy name)
+            const { status, de_id, q, limit } = params as {
+                status?: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+                de_id?: number;
+                q?: string;
+                limit?: number;
+            };
+            const result = await getIssues({
+                status,
+                de_id,
+                q,
+                limit: limit || 10
+            }, cookie);
+            return result.data;
+        }
+
         case "get_notifications": {
-            const { unread, limit } = params as { unread?: boolean; limit?: number };
+            const { unread, is_read, limit } = params as {
+                unread?: boolean;
+                is_read?: boolean;
+                limit?: number;
+            };
+            const normalizedUnread =
+                typeof unread === "boolean"
+                    ? unread
+                    : typeof is_read === "boolean"
+                        ? !is_read
+                        : undefined;
             return await getNotifications({
-                unread,
+                unread: normalizedUnread,
                 limit: limit || 10
             }, cookie);
         }

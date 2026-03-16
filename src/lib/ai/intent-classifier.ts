@@ -134,6 +134,7 @@ function classifyIntentHeuristic(query: string): ClassifiedIntent {
     const hasNotification = /แจ้งเตือน|notification|alert/i.test(normalized);
     const hasTicket = /ticket|issue|ปัญหา|งานซ่อม|incident|request/i.test(normalized);
     const hasDevice = /device|asset|อุปกรณ์|คอม|โน้ตบุ๊ก|โน้ตบุค|laptop|pc|tag|serial|(?<!ลืม)(รหัส)(?!ผ่าน)/i.test(normalized);
+    const hasAvailability = /ว่าง|พร้อมใช้|พร้อมยืม|ยืมได้|available|ready|คงเหลือ|เหลือ/i.test(normalized);
 
     if (hasNotification) {
         return {
@@ -151,7 +152,7 @@ function classifyIntentHeuristic(query: string): ClassifiedIntent {
         };
     }
 
-    if (hasDevice) {
+    if (hasDevice || hasAvailability) {
         return {
             intent: "device_lookup",
             confidence: 0.9,

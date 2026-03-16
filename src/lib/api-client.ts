@@ -23,6 +23,14 @@ interface RequestOptions {
     cookie?: string;
 }
 
+// Standardized response envelope from Orbis-Track
+interface BaseResponse<T> {
+    message?: string;
+    success?: boolean;
+    data?: T;
+    traceStack?: string;
+}
+
 /**
  * Make a request to the main app API
  */
@@ -203,6 +211,126 @@ export async function getDeviceChildStatus(
 
 export async function getCategories(cookie?: string): Promise<Category[]> {
     return makeRequest<Category[]>("/api/v1/categories", { cookie });
+}
+
+// ============================================================================
+// Borrow API (Availability / Borrowing)
+// ============================================================================
+
+export interface BorrowInventoryItem {
+    de_id: number;
+    de_serial_number: string;
+    de_name: string;
+    de_description: string | null;
+    de_location: string;
+    de_max_borrow_days: number;
+    de_images: string | null;
+    category: string;
+    department?: string | null;
+    sub_section?: string | null;
+    total: number;
+    available: number;
+}
+
+export interface BorrowDeviceAccessory {
+    acc_name: string;
+    acc_quantity: number;
+}
+
+export interface BorrowDeviceSummary {
+    de_serial_number: string;
+    de_name: string;
+    de_description: string | null;
+    de_location: string;
+    de_max_borrow_days: number;
+    de_images: string | null;
+    category?: { ca_name: string };
+    accessories?: BorrowDeviceAccessory[];
+    department?: string | null;
+    section?: string | null;
+    total: number;
+    ready: number;
+}
+
+export interface BorrowAvailableDeviceChild {
+    dec_id: number;
+    dec_serial_number: string | null;
+    dec_asset_code: string;
+    dec_status: "UNAVAILABLE" | "READY" | "BORROWED" | "REPAIRING" | "DAMAGED" | "LOST";
+    activeBorrow: Array<{
+        da_start: string;
+        da_end: string;
+    }>;
+}
+
+export interface TicketAvailableDeviceChild {
+    dec_id: number;
+    dec_serial_number: string | null;
+    dec_asset_code: string;
+    dec_has_serial_number: boolean;
+    dec_status: "UNAVAILABLE" | "READY" | "BORROWED" | "REPAIRING" | "DAMAGED" | "LOST";
+    dec_de_id: number;
+    deleted_at: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
+export async function getBorrowInventory(
+    cookie?: string
+): Promise<BorrowInventoryItem[]> {
+    const res = await makeRequest<BaseResponse<BorrowInventoryItem[]>>(
+        "/api/v1/borrow/devices",
+        { cookie }
+    );
+    return res.data ?? [];
+}
+
+export async function getBorrowDeviceSummary(
+    id: number,
+    cookie?: string
+): Promise<BorrowDeviceSummary | null> {
+    const res = await makeRequest<BaseResponse<BorrowDeviceSummary>>(
+        `/api/v1/borrow/devices/${id}`,
+        { cookie }
+    );
+    return res.data ?? null;
+}
+
+export async function getBorrowAvailableDeviceChildren(
+    id: number,
+    cookie?: string
+): Promise<BorrowAvailableDeviceChild[]> {
+    const res = await makeRequest<BaseResponse<BorrowAvailableDeviceChild[]>>(
+        `/api/v1/borrow/available/${id}`,
+        { cookie }
+    );
+    return res.data ?? [];
+}
+
+export async function getTicketDeviceAvailableChildren(
+    params: {
+        deviceId: number;
+        deviceChildIds?: number[];
+        startDate: string;
+        endDate: string;
+    },
+    cookie?: string
+): Promise<TicketAvailableDeviceChild[]> {
+    const queryParams = new URLSearchParams();
+    queryParams.set("deviceId", params.deviceId.toString());
+    if (params.deviceChildIds && params.deviceChildIds.length > 0) {
+        for (const id of params.deviceChildIds) {
+            queryParams.append("deviceChildIds", id.toString());
+        }
+    }
+    queryParams.set("startDate", params.startDate);
+    queryParams.set("endDate", params.endDate);
+
+    const res = await makeRequest<BaseResponse<TicketAvailableDeviceChild[]>>(
+        `/api/v1/tickets/borrow-return/device-available?${queryParams.toString()}`,
+        { cookie }
+    );
+    return res.data ?? [];
 }
 
 // ============================================================================
