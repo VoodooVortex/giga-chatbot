@@ -72,9 +72,28 @@ export function AppSidebar() {
     return match ? Number(match[1]) : null;
   }, [pathname]);
 
-  // Allow "แชทใหม่" only when the current room already has messages.
-  const isInRoom =
-    currentRoomId !== null && rooms.some((r) => r.cr_id === currentRoomId);
+  // Allow "แชทใหม่" when the user is inside any room route.
+  const isInRoom = currentRoomId !== null;
+
+  // Ensure the current room is visible immediately in the sidebar even
+  // before the first message is saved (API hides empty rooms).
+  React.useEffect(() => {
+    if (currentRoomId === null) return;
+    setRooms((prev) => {
+      if (prev.some((r) => r.cr_id === currentRoomId)) return prev;
+      const now = new Date().toISOString();
+      return [
+        {
+          cr_id: currentRoomId,
+          cr_title: null,
+          preview_title: "แชทใหม่",
+          created_at: now,
+          updated_at: now,
+        },
+        ...prev,
+      ];
+    });
+  }, [currentRoomId]);
 
   // Initial load with spinner.
   React.useEffect(() => {

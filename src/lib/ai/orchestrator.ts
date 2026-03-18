@@ -248,9 +248,14 @@ async function executeToolsForIntent(
     }
 
     case "notification_check": {
-      const wantsAll = wantsAllNotifications(query);
+      const unreadOnly = wantsUnreadNotifications(query);
       return await executeToolCalls(
-        [{ tool: "get_notifications", params: { unread: wantsAll ? false : true, limit: 20 } }],
+        [
+          {
+            tool: "get_notifications",
+            params: { unread: unreadOnly ? true : false, limit: 20 },
+          },
+        ],
         cookie,
       );
     }
@@ -656,6 +661,10 @@ function wantsAllNotifications(query: string): boolean {
   );
 }
 
+function wantsUnreadNotifications(query: string): boolean {
+  return /(ยังไม่อ่าน|ยังไม่ได้อ่าน|ค้างอ่าน|unread)/i.test(query);
+}
+
 function buildDeterministicListResponse(
   query: string,
   toolResults: ToolCall[],
@@ -724,13 +733,23 @@ function buildDeterministicNotificationResponse(
     return "ไม่มีการแจ้งเตือนในขณะนี้";
   }
 
-  const header = wantsAllNotifications(query)
-    ? `การแจ้งเตือนทั้งหมด (${notifications.length} รายการ):`
-    : `การแจ้งเตือนที่ยังไม่ได้อ่าน (${notifications.length} รายการ):`;
+  const unreadOnly = wantsUnreadNotifications(query);
+  const { ordered, unreadCount } = orderNotifications(notifications);
+  const total = ordered.length;
+
+  const header = unreadOnly
+    ? `การแจ้งเตือนที่ยังไม่ได้อ่าน (${unreadCount} รายการ):`
+    : wantsAllNotifications(query)
+      ? `การแจ้งเตือนทั้งหมด (${total} รายการ):`
+      : `การแจ้งเตือนล่าสุด (${total} รายการ)${
+          unreadCount > 0 ? ` — ยังไม่ได้อ่าน ${unreadCount} รายการ` : ""
+        }:`;
 
   const lines: string[] = [header];
 
-  notifications.forEach((raw, index) => {
+  const list = unreadOnly ? ordered.filter((n) => isUnreadNotification(n)) : ordered;
+
+  list.forEach((raw, index) => {
     const record = raw as Record<string, unknown>;
     const title =
       (record.n_title as string) ||
@@ -777,6 +796,23 @@ function extractNotifications(result: unknown): Array<Record<string, unknown>> {
     }
   }
   return [];
+}
+
+function isUnreadNotification(notification: Record<string, unknown>): boolean {
+  if ("nr_status" in notification) return notification.nr_status === "UNREAD";
+  if ("status" in notification) return notification.status === "UNREAD";
+  if ("read_at" in notification) return !notification.read_at;
+  if ("isRead" in notification) return !notification.isRead;
+  return false;
+}
+
+function orderNotifications(notifications: Array<Record<string, unknown>>): {
+  ordered: Array<Record<string, unknown>>;
+  unreadCount: number;
+} {
+  const unread = notifications.filter((n) => isUnreadNotification(n));
+  const read = notifications.filter((n) => !isUnreadNotification(n));
+  return { ordered: [...unread, ...read], unreadCount: unread.length };
 }
 
 function formatNotificationMessage(message: string): string {

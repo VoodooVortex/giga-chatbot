@@ -111,10 +111,12 @@ const HistoryRefreshBridge = ({
         }),
       );
 
+    const t0 = setTimeout(sync, 200);
     const t1 = setTimeout(sync, 1000);
     const t2 = setTimeout(sync, 3000);
 
     return () => {
+      clearTimeout(t0);
       clearTimeout(t1);
       clearTimeout(t2);
     };
@@ -236,7 +238,9 @@ const AssistantInner = ({
       // the page is navigating (pathname change will also trigger silentRefresh
       // in AppSidebar, but this fires earlier).
       window.dispatchEvent(
-        new CustomEvent("chat:history-refresh", { detail: { roomId: null } }),
+        new CustomEvent("chat:history-refresh", {
+          detail: { roomId: id, syncFromServer: true },
+        }),
       );
     },
     [router],
