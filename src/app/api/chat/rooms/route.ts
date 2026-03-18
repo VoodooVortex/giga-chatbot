@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
     try {
         const cookieHeader = req.headers.get("cookie");
-        const session = await getApiSession(cookieHeader);
+        const authorizationHeader = req.headers.get("authorization");
+        const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
             return NextResponse.json(
@@ -94,7 +95,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
     try {
         const cookieHeader = req.headers.get("cookie");
-        const session = await getApiSession(cookieHeader);
+        const authorizationHeader = req.headers.get("authorization");
+        const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
             return NextResponse.json(

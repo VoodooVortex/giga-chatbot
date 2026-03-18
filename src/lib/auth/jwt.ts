@@ -43,6 +43,29 @@ export function extractTokenFromCookie(cookieHeader: string | null): string | nu
 }
 
 /**
+ * Extract token from Authorization header (Bearer token)
+ */
+export function extractTokenFromAuthorizationHeader(
+    authorizationHeader: string | null
+): string | null {
+    if (!authorizationHeader) return null;
+    const trimmed = authorizationHeader.trim();
+    if (!trimmed) return null;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+        return parts[1];
+    }
+    return trimmed;
+}
+
+/**
+ * Build a cookie header for chatbot proxy calls using the JWT token.
+ */
+export function buildCookieHeaderFromToken(token: string): string {
+    return `${COOKIE_NAME}=${encodeURIComponent(token)}`;
+}
+
+/**
  * Check if user has required role
  */
 export function hasRole(payload: TokenPayload, requiredRoles: string[]): boolean {

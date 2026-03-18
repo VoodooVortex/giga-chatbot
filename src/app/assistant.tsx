@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import type { UIMessage } from "ai";
+import { getAuthHeader } from "@/lib/auth/client";
 
 // Watches for roomId in message metadata and navigates to the new room.
 // Tries both msg.metadata.roomId (direct) and msg.metadata.custom.roomId
@@ -56,6 +57,7 @@ const RoomNavigator = ({
       try {
         const resp = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
           credentials: "include",
+          headers: getAuthHeader(),
         });
         if (!resp.ok) return;
         const payload = (await resp.json()) as {
@@ -146,6 +148,7 @@ export const Assistant = ({ roomId }: AssistantProps) => {
           `${basePath}/api/chat/rooms/${roomId}/messages`,
           {
             credentials: "include",
+            headers: getAuthHeader(),
           },
         );
 
@@ -246,6 +249,7 @@ const AssistantInner = ({
         ? `${basePath}/api/chat/rooms/${roomId}`
         : `${basePath}/api/chat`,
       credentials: "include",
+      headers: async () => getAuthHeader(),
     }),
   });
 

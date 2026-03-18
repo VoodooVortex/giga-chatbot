@@ -505,21 +505,34 @@ export interface Notification {
     created_at: string;
     send_at: string | null;
     // Recipient info
+    nr_id?: number;
     nr_status?: "UNREAD" | "READ" | "DISMISSED";
+    status?: "UNREAD" | "READ" | "DISMISSED";
+    event?: string | null;
     read_at?: string | null;
+    dismissed_at?: string | null;
+}
+
+export interface PaginatedResult<T> {
+    data: T[];
+    total: number;
+    page: number;
+    limit: number;
+    maxPage: number;
+    paginated?: boolean;
 }
 
 export async function getNotifications(
     params?: { unread?: boolean; limit?: number; page?: number },
     cookie?: string
-): Promise<Notification[]> {
+): Promise<PaginatedResult<Notification>> {
     const queryParams = new URLSearchParams();
     if (params?.unread) queryParams.set("unread", "true");
     if (params?.limit) queryParams.set("limit", params.limit.toString());
     if (params?.page) queryParams.set("page", params.page.toString());
 
     const query = queryParams.toString();
-    return makeRequest<Notification[]>(
+    return makeRequest<PaginatedResult<Notification>>(
         `/api/v1/notifications${query ? `?${query}` : ""}`,
         { cookie }
     );

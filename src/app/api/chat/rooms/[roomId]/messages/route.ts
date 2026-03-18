@@ -25,7 +25,8 @@ export async function GET(
     try {
         const { roomId } = await params;
         const cookieHeader = req.headers.get("cookie");
-        const session = await getApiSession(cookieHeader);
+        const authorizationHeader = req.headers.get("authorization");
+        const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
             return NextResponse.json(
@@ -86,7 +87,8 @@ export async function POST(
     try {
         const { roomId } = await params;
         const cookieHeader = req.headers.get("cookie");
-        const session = await getApiSession(cookieHeader);
+        const authorizationHeader = req.headers.get("authorization");
+        const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
             return NextResponse.json(

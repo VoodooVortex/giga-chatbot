@@ -3,6 +3,7 @@ import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Icon } from "@iconify/react";
 import Link from "next/link";
+import { getAuthHeader } from "@/lib/auth/client";
 
 import {
   Sidebar,
@@ -36,6 +37,7 @@ export function AppSidebar() {
       setIsLoading(true);
       const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
         credentials: "include",
+        headers: getAuthHeader(),
       });
       if (!response.ok) throw new Error(`Failed to load rooms: ${response.status}`);
       const payload = (await response.json()) as { data?: ChatRoomItem[] };
@@ -53,6 +55,7 @@ export function AppSidebar() {
     try {
       const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
         credentials: "include",
+        headers: getAuthHeader(),
       });
       if (!response.ok) return;
       const payload = (await response.json()) as { data?: ChatRoomItem[] };
@@ -126,7 +129,7 @@ export function AppSidebar() {
       const response = await fetch(`${basePath}/api/chat/rooms?_t=${Date.now()}`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
         body: JSON.stringify({ title: null }),
       });
 

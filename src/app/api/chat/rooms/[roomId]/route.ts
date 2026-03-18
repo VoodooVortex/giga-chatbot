@@ -140,7 +140,8 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     }
 
     const cookieHeader = req.headers.get("cookie");
-    const session = await getApiSession(cookieHeader);
+    const authorizationHeader = req.headers.get("authorization");
+    const session = await getApiSession(cookieHeader, authorizationHeader);
 
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

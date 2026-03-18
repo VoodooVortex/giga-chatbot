@@ -282,9 +282,17 @@ export function formatToolResultsForDisplay(toolResults: ToolCall[]): string {
             }
 
             case "get_notifications": {
-                const notifications = Array.isArray(result) ? result : [];
+                const payload = result as { notifications?: unknown[]; data?: unknown[] };
+                const notifications = Array.isArray(result)
+                    ? result
+                    : Array.isArray(payload?.notifications)
+                        ? payload.notifications
+                        : Array.isArray(payload?.data)
+                            ? payload.data
+                            : [];
                 const unread = notifications.filter((n: Record<string, unknown>) => {
                     if ("nr_status" in n) return n.nr_status === "UNREAD";
+                    if ("status" in n) return n.status === "UNREAD";
                     if ("read_at" in n) return !n.read_at;
                     return !(n as { isRead?: boolean }).isRead;
                 });

@@ -383,10 +383,41 @@ export async function executeTool(
                     : typeof is_read === "boolean"
                         ? !is_read
                         : undefined;
-            return await getNotifications({
+            const response = await getNotifications({
                 unread: normalizedUnread,
-                limit: limit || 10
+                limit: limit || 10,
+                page: 1,
             }, cookie);
+
+            const payload =
+                response && typeof response === "object" && "data" in response
+                    ? (response as { data?: unknown[]; total?: number; page?: number; limit?: number; maxPage?: number })
+                    : { data: Array.isArray(response) ? response : [] };
+
+            let notifications = Array.isArray(payload.data) ? payload.data : [];
+
+            if (normalizedUnread === true) {
+                notifications = notifications.filter((n) => {
+                    if (n && typeof n === "object") {
+                        const record = n as Record<string, unknown>;
+                        if ("nr_status" in record) return record.nr_status === "UNREAD";
+                        if ("status" in record) return record.status === "UNREAD";
+                        if ("read_at" in record) return !record.read_at;
+                        if ("isRead" in record) return !record.isRead;
+                    }
+                    return true;
+                });
+            }
+
+            return {
+                notifications,
+                meta: {
+                    total: typeof payload.total === "number" ? payload.total : notifications.length,
+                    page: typeof payload.page === "number" ? payload.page : 1,
+                    limit: typeof payload.limit === "number" ? payload.limit : notifications.length,
+                    maxPage: typeof payload.maxPage === "number" ? payload.maxPage : 1,
+                },
+            };
         }
 
         case "mark_notifications_read": {

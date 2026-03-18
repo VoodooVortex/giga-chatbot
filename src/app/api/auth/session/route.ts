@@ -8,7 +8,8 @@ import { getApiSession } from "@/lib/auth/session";
  */
 export async function GET(request: NextRequest) {
     const cookieHeader = request.headers.get("cookie");
-    const session = await getApiSession(cookieHeader);
+    const authorizationHeader = request.headers.get("authorization");
+    const session = await getApiSession(cookieHeader, authorizationHeader);
 
     if (!session) {
         return NextResponse.json(

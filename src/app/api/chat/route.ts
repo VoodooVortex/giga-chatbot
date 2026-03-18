@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { getApiSession } from "@/lib/auth/session";
+import { buildCookieHeaderFromToken, extractTokenFromAuthorizationHeader } from "@/lib/auth/jwt";
 import { orchestrate } from "@/lib/ai/orchestrator";
 import { env } from "@/lib/config";
 import { db } from "@/lib/db";
@@ -193,7 +194,8 @@ export async function POST(req: NextRequest) {
   try {
     // Get session from cookie
     const cookieHeader = req.headers.get("cookie");
-    const session = await getApiSession(cookieHeader);
+    const authorizationHeader = req.headers.get("authorization");
+    const session = await getApiSession(cookieHeader, authorizationHeader);
 
     if (!session) {
       return NextResponse.json(
@@ -282,12 +284,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Run AI orchestration
+    const tokenFromAuth = extractTokenFromAuthorizationHeader(authorizationHeader);
+    const authCookieHeader =
+      cookieHeader || (tokenFromAuth ? buildCookieHeaderFromToken(tokenFromAuth) : null);
+
     let result: Awaited<ReturnType<typeof orchestrate>>;
     try {
       result = await orchestrateWithTimeout(
         {
           query: userQuery,
-          cookie: cookieHeader || undefined,
+          cookie: authCookieHeader || undefined,
           conversationHistory,
           useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
         },
@@ -370,7 +376,8 @@ export async function POST(req: NextRequest) {
 // SSE endpoint for streaming responses
 export async function GET(req: NextRequest) {
   const cookieHeader = req.headers.get("cookie");
-  const session = await getApiSession(cookieHeader);
+  const authorizationHeader = req.headers.get("authorization");
+  const session = await getApiSession(cookieHeader, authorizationHeader);
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });

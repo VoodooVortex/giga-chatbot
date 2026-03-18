@@ -108,6 +108,38 @@ export async function orchestrate(
     };
   }
 
+  const notificationResponse = buildDeterministicNotificationResponse(
+    intent.intent,
+    query,
+    toolResults,
+  );
+  if (notificationResponse) {
+    return {
+      response: notificationResponse,
+      intent: intent.intent,
+      sources: {
+        rag: ragContexts.length > 0 ? ragContexts : undefined,
+        tools: toolResults.length > 0 ? toolResults : undefined,
+      },
+    };
+  }
+
+  const assetResponse = buildDeterministicAssetResponse(
+    intent.intent,
+    query,
+    toolResults,
+  );
+  if (assetResponse) {
+    return {
+      response: assetResponse,
+      intent: intent.intent,
+      sources: {
+        rag: ragContexts.length > 0 ? ragContexts : undefined,
+        tools: toolResults.length > 0 ? toolResults : undefined,
+      },
+    };
+  }
+
   // Step 3: Generate Response
   console.log("[AI Orchestrator] Step 3: Generating response...");
   const response = await generateResponse({
@@ -216,8 +248,9 @@ async function executeToolsForIntent(
     }
 
     case "notification_check": {
+      const wantsAll = wantsAllNotifications(query);
       return await executeToolCalls(
-        [{ tool: "get_notifications", params: { unread: true, limit: 20 } }],
+        [{ tool: "get_notifications", params: { unread: wantsAll ? false : true, limit: 20 } }],
         cookie,
       );
     }
@@ -508,6 +541,8 @@ function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
     "ready",
     "คงเหลือ",
     "เหลือ",
+    "ใช้งาน",
+    "ใช้งานได้",
   ]);
 
   const listTerms = new Set([
@@ -531,12 +566,56 @@ function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
     "inventory",
   ]);
 
+  const fillerTerms = new Set([
+    "ตรวจสอบ",
+    "เช็ค",
+    "เช็ก",
+    "ดู",
+    "ค้นหา",
+    "หา",
+    "สอบถาม",
+    "ถาม",
+    "บอก",
+    "อยาก",
+    "ต้องการ",
+    "ขอ",
+    "ช่วย",
+    "กรุณา",
+    "มี",
+    "ที่",
+    "ให้",
+    "ด้วย",
+  ]);
+
+  const trailingParticles = /(นะครับ|นะคะ|ครับ|ค่ะ|คะ|นะ|ไหม|มั้ย|รึเปล่า|หรือเปล่า|หรือปล่าว|เปล่า|ปะ|มะ)$/i;
+
+  const stripSubstrings = (value: string, substrings: string[]): string => {
+    let output = value;
+    for (const sub of substrings) {
+      if (!sub) continue;
+      output = output.split(sub).join("");
+    }
+    return output;
+  };
+
+  const normalizeKeyword = (word: string): string => {
+    let normalized = word.trim().toLowerCase();
+    if (!normalized) return "";
+    normalized = normalized.replace(trailingParticles, "");
+    normalized = stripSubstrings(normalized, Array.from(fillerTerms));
+    normalized = stripSubstrings(normalized, Array.from(listTerms));
+    normalized = stripSubstrings(normalized, Array.from(availabilityTerms));
+    normalized = stripSubstrings(normalized, Array.from(genericDeviceTerms));
+    return normalized.trim();
+  };
+
   const cleaned = rawKeywords
-    .map((word) => word.trim())
+    .map((word) => normalizeKeyword(word))
     .filter((word) => word.length > 0)
     .filter((word) => !availabilityTerms.has(word.toLowerCase()))
     .filter((word) => !listTerms.has(word.toLowerCase()))
-    .filter((word) => !genericDeviceTerms.has(word.toLowerCase()));
+    .filter((word) => !genericDeviceTerms.has(word.toLowerCase()))
+    .filter((word) => !fillerTerms.has(word.toLowerCase()));
 
   const term = cleaned.join(" ").trim();
   return term || intent.entities.deviceId?.trim();
@@ -566,7 +645,15 @@ function extractAssetMatch(
 }
 
 function isListAllAvailabilityQuery(query: string): boolean {
-  return /(ทั้งหมด|ลิสต์|รายการ|all|list|show|แสดง|รวม)/i.test(query);
+  return /(ทั้งหมด|ลิสต์|รายการ|all|list|show|แสดง|รวม|มีอุปกรณ์ว่าง|มีของว่าง|อุปกรณ์ว่างมีอะไรบ้าง|มีอุปกรณ์ว่างอะไรบ้าง|ตรวจสอบอุปกรณ์.*ว่าง|เช็คอุปกรณ์.*ว่าง|ดูอุปกรณ์.*ว่าง|any available devices|any available equipment)/i.test(
+    query,
+  );
+}
+
+function wantsAllNotifications(query: string): boolean {
+  return /(ทั้งหมด|all|แสดงทั้งหมด|ทั้งหมดที่มี|ทั้งหมดของฉัน|ทั้งหมดในระบบ)/i.test(
+    query,
+  );
 }
 
 function buildDeterministicListResponse(
@@ -579,7 +666,15 @@ function buildDeterministicListResponse(
     (tool) => tool.tool === "list_devices_with_availability",
   );
 
-  if (!listTool || !Array.isArray(listTool.result)) {
+  if (!listTool) {
+    return null;
+  }
+
+  if (listTool.error) {
+    return "ไม่สามารถดึงรายการอุปกรณ์ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+
+  if (!Array.isArray(listTool.result)) {
     return null;
   }
 
@@ -605,6 +700,231 @@ function buildDeterministicListResponse(
   });
 
   return [header, ...lines].join("\n");
+}
+
+function buildDeterministicNotificationResponse(
+  intent: string,
+  query: string,
+  toolResults: ToolCall[],
+): string | null {
+  if (intent !== "notification_check") return null;
+
+  const notificationTool = toolResults.find(
+    (tool) => tool.tool === "get_notifications",
+  );
+
+  if (!notificationTool) return null;
+
+  if (notificationTool.error) {
+    return "ไม่สามารถดึงการแจ้งเตือนได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+
+  const notifications = extractNotifications(notificationTool.result);
+  if (notifications.length === 0) {
+    return "ไม่มีการแจ้งเตือนในขณะนี้";
+  }
+
+  const header = wantsAllNotifications(query)
+    ? `การแจ้งเตือนทั้งหมด (${notifications.length} รายการ):`
+    : `การแจ้งเตือนที่ยังไม่ได้อ่าน (${notifications.length} รายการ):`;
+
+  const lines: string[] = [header];
+
+  notifications.forEach((raw, index) => {
+    const record = raw as Record<string, unknown>;
+    const title =
+      (record.n_title as string) ||
+      (record.title as string) ||
+      "การแจ้งเตือน";
+    const messageRaw =
+      (record.n_message as string) || (record.message as string) || "";
+    const message = formatNotificationMessage(messageRaw);
+    const createdAt =
+      (record.send_at as string) ||
+      (record.created_at as string) ||
+      "";
+    const route = normalizeNotificationRoute(
+      (record.n_target_route as string) ||
+        (record.target_route as string) ||
+        (record.link as string) ||
+        null,
+    );
+
+    const timeLabel = createdAt ? ` (${createdAt})` : "";
+    lines.push(`${index + 1}. ${title}${timeLabel}`);
+    if (message) {
+      lines.push(`รายละเอียด: ${message}`);
+    }
+    if (route) {
+      lines.push(`ดูเพิ่มเติม: [เปิดรายละเอียด](${route})`);
+    }
+  });
+
+  return lines.join("\n");
+}
+
+function extractNotifications(result: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(result)) {
+    return result as Array<Record<string, unknown>>;
+  }
+  if (result && typeof result === "object") {
+    const payload = result as Record<string, unknown>;
+    if (Array.isArray(payload.notifications)) {
+      return payload.notifications as Array<Record<string, unknown>>;
+    }
+    if (Array.isArray(payload.data)) {
+      return payload.data as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
+function formatNotificationMessage(message: string): string {
+  if (!message) return "";
+  const lines = message
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^ดูเพิ่มเติม$/i.test(line))
+    .filter((line) => !/^ดูเพิ่ม$/i.test(line));
+  return lines.join(" | ");
+}
+
+function normalizeNotificationRoute(route: string | null): string | null {
+  if (!route) return null;
+  const trimmed = route.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("/")) return trimmed;
+  return `/${trimmed}`;
+}
+
+function buildDeterministicAssetResponse(
+  intent: string,
+  query: string,
+  toolResults: ToolCall[],
+): string | null {
+  if (intent !== "device_lookup") return null;
+
+  const assetCode = extractAssetCode(query);
+  if (!assetCode) return null;
+
+  const assetTool = toolResults.find(
+    (tool) => tool.tool === "find_device_child_by_asset_code",
+  );
+  if (!assetTool) return null;
+
+  if (assetTool.error) {
+    return `ไม่สามารถตรวจสอบอุปกรณ์ ${assetCode} ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง`;
+  }
+
+  const match = extractAssetMatch(assetTool);
+  if (!match?.child) {
+    return `ไม่พบอุปกรณ์ที่มี Asset Code ${assetCode}`;
+  }
+
+  const child = match.child as Record<string, unknown>;
+  const device = (match.device ?? {}) as Record<string, unknown>;
+  const decStatus = (child.dec_status as string | undefined) ?? undefined;
+  const derivedAvailable = deriveAvailabilityFromChild(child, match.available);
+
+  const statusLabel = mapChildStatus(decStatus);
+  const availabilityLabel = derivedAvailable ? "พร้อมใช้งาน" : "ไม่พร้อมใช้งาน";
+  const availabilityYesNo = derivedAvailable ? "ใช่" : "ไม่ใช่";
+  const assetLabel =
+    (child.dec_asset_code as string | undefined) ?? assetCode;
+
+  const lines: string[] = [];
+  lines.push(`ผลการตรวจสอบ ${assetLabel}:`);
+  if (device.de_name || device.name) {
+    lines.push(
+      `อุปกรณ์แม่: ${device.de_name || device.name}${
+        device.de_id ? ` (ID: ${device.de_id})` : ""
+      }`,
+    );
+  }
+  if (device.de_location || device.location) {
+    lines.push(`ที่เก็บ: ${device.de_location || device.location}`);
+  }
+  if (child.dec_serial_number) {
+    lines.push(`Serial: ${child.dec_serial_number}`);
+  }
+  lines.push(`สถานะ: ${availabilityLabel} (${statusLabel}${decStatus ? ` / ${decStatus}` : ""})`);
+  lines.push(`พร้อมให้ยืมตอนนี้: ${availabilityYesNo}`);
+
+  const borrowRange = formatBorrowRange(
+    (child.activeBorrow as Array<Record<string, unknown>>) ?? [],
+  );
+  if (borrowRange) {
+    lines.push(`ช่วงการยืม: ${borrowRange}`);
+  }
+
+  return lines.join("\n");
+}
+
+function mapChildStatus(status?: string): string {
+  switch ((status || "").toUpperCase()) {
+    case "READY":
+      return "พร้อมใช้งาน";
+    case "BORROWED":
+      return "กำลังยืม";
+    case "REPAIRING":
+      return "กำลังซ่อม";
+    case "DAMAGED":
+      return "เสียหาย";
+    case "LOST":
+      return "สูญหาย";
+    case "UNAVAILABLE":
+      return "ไม่พร้อมใช้งาน";
+    default:
+      return "ไม่ทราบสถานะ";
+  }
+}
+
+function deriveAvailabilityFromChild(
+  child: Record<string, unknown>,
+  fallback?: boolean,
+): boolean {
+  if (typeof fallback === "boolean") return fallback;
+  const status = (child.dec_status as string | undefined)?.toUpperCase();
+  const activeBorrow = Array.isArray(child.activeBorrow)
+    ? child.activeBorrow
+    : [];
+  const isReady = status === "READY";
+  const hasActiveBorrow = activeBorrow.length > 0;
+  return isReady && !hasActiveBorrow;
+}
+
+function formatBorrowRange(
+  activeBorrow: Array<Record<string, unknown>>,
+): string | null {
+  if (!activeBorrow || activeBorrow.length === 0) return null;
+  const formatDate = (value: unknown): string => {
+    if (!value) return "";
+    if (value instanceof Date) {
+      return value.toISOString().slice(0, 10);
+    }
+    if (typeof value === "string") {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString().slice(0, 10);
+      }
+      return value;
+    }
+    return String(value);
+  };
+
+  const first = activeBorrow[0] ?? {};
+  const start = formatDate(first.da_start);
+  const end = formatDate(first.da_end);
+  const range = start || end ? `${start || "?"} ถึง ${end || "?"}` : "";
+
+  if (activeBorrow.length === 1) {
+    return range || null;
+  }
+
+  const suffix = ` (อีก ${activeBorrow.length - 1} รายการ)`;
+  return range ? `${range}${suffix}` : suffix;
 }
 
 function extractDateRange(
@@ -830,6 +1150,26 @@ export async function* orchestrateStreaming(
     const deterministicResponse = buildDeterministicListResponse(query, tools);
     if (deterministicResponse) {
       yield { type: "response", data: deterministicResponse };
+      return;
+    }
+
+    const notificationResponse = buildDeterministicNotificationResponse(
+      intent.intent,
+      query,
+      tools,
+    );
+    if (notificationResponse) {
+      yield { type: "response", data: notificationResponse };
+      return;
+    }
+
+    const assetResponse = buildDeterministicAssetResponse(
+      intent.intent,
+      query,
+      tools,
+    );
+    if (assetResponse) {
+      yield { type: "response", data: assetResponse };
       return;
     }
   }

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { verifyToken, extractTokenFromCookie, type TokenPayload } from "./jwt";
+import { verifyToken, extractTokenFromCookie, extractTokenFromAuthorizationHeader, type TokenPayload } from "./jwt";
 import { env } from "@/lib/config";
 
 const COOKIE_NAME = env.COOKIE_NAME;
@@ -68,9 +68,14 @@ export function requireRoles(session: Session, requiredRoles: string[]): void {
 /**
  * Get session for API routes
  */
-export async function getApiSession(cookieHeader: string | null): Promise<Session | null> {
+export async function getApiSession(
+    cookieHeader: string | null,
+    authorizationHeader?: string | null
+): Promise<Session | null> {
     try {
-        const token = extractTokenFromCookie(cookieHeader);
+        const token =
+            extractTokenFromAuthorizationHeader(authorizationHeader ?? null) ||
+            extractTokenFromCookie(cookieHeader);
         if (!token) return null;
 
         const payload = await verifyToken(token);
