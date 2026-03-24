@@ -27,7 +27,7 @@ interface PaginatedResult<T> {
   paginated?: boolean;
 }
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 const mapEventType = (event?: string | null): NotificationItemProps["type"] => {
   switch (event) {

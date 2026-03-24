@@ -417,7 +417,7 @@ export async function executeTool(
                         : undefined;
             const response = await getNotifications({
                 unread: normalizedUnread,
-                limit: limit || 10,
+                limit: limit || 20,
                 page: 1,
             }, cookie);
 
