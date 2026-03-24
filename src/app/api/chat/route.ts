@@ -9,6 +9,8 @@ import { buildCookieHeaderFromToken, extractTokenFromAuthorizationHeader } from 
 import { orchestrate } from "@/lib/ai/orchestrator";
 import { env } from "@/lib/config";
 import { db } from "@/lib/db";
+import { logger } from "@/lib/observability/logger";
+import { metrics, METRIC_NAMES } from "@/lib/observability/metrics";
 export const dynamic = "force-dynamic";
 
 import { chatMessages, chatRooms } from "@/lib/db/schema";
@@ -137,6 +139,21 @@ function toChatStreamResponse(text: string, metadata?: unknown): Response {
   return createUIMessageStreamResponse({ stream });
 }
 
+function getRequestId(req: NextRequest): string {
+  return req.headers.get("x-request-id")?.trim() || crypto.randomUUID();
+}
+
+function recordRequestMetric(
+  method: string,
+  route: string,
+  status: number,
+  latencyMs: number,
+): void {
+  const labels = { method, route, status: String(status) };
+  metrics.counter(METRIC_NAMES.API_REQUESTS_TOTAL, labels);
+  metrics.histogram(METRIC_NAMES.API_REQUEST_DURATION, latencyMs, labels);
+}
+
 function parseRetryDelayMs(error: unknown): number | null {
   const message = error instanceof Error ? error.message : String(error ?? "");
 
@@ -191,6 +208,10 @@ async function orchestrateWithTimeout(
 }
 
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req);
+  const startedAt = Date.now();
+  const route = "/api/chat";
+
   try {
     // Get session from cookie
     const cookieHeader = req.headers.get("cookie");
@@ -198,6 +219,9 @@ export async function POST(req: NextRequest) {
     const session = await getApiSession(cookieHeader, authorizationHeader);
 
     if (!session) {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 401, latencyMs);
+      logger.logRequest("POST", route, 401, latencyMs, { requestId });
       return NextResponse.json(
         { error: "Unauthorized", message: "Please login to use the chat" },
         { status: 401 }
@@ -207,6 +231,12 @@ export async function POST(req: NextRequest) {
     // Rate limiting
     const rateLimitKey = session.user.id;
     if (!checkRateLimit(rateLimitKey)) {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 429, latencyMs);
+      logger.logRequest("POST", route, 429, latencyMs, {
+        requestId,
+        userId: session.user.id,
+      });
       return NextResponse.json(
         { error: "Rate limit exceeded", message: "Too many requests. Please try again later." },
         { status: 429 }
@@ -218,6 +248,12 @@ export async function POST(req: NextRequest) {
     const { messages } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Messages array is required" },
         { status: 400 }
@@ -227,6 +263,12 @@ export async function POST(req: NextRequest) {
     // Get the last user message
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role !== "user") {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Last message must be from user" },
         { status: 400 }
@@ -235,6 +277,12 @@ export async function POST(req: NextRequest) {
 
     const userQuery = extractMessageTextDeep(lastMessage);
     if (!userQuery) {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Last user message content is required" },
         { status: 400 }
@@ -271,14 +319,25 @@ export async function POST(req: NextRequest) {
         1,
         Math.ceil((aiQuotaCooldownUntil - now) / 1000),
       );
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 200, latencyMs);
+      logger.logRequest("POST", route, 200, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomId),
+        intent: "fallback",
+        responsePath: "fallback",
+        reason: "quota_cooldown",
+      });
       return toChatStreamResponse(
         `ขออภัย โควต้า AI ชั่วคราวเต็ม กรุณาลองใหม่อีกครั้งในประมาณ ${retryAfterSec} วินาที`,
         {
           intent: "fallback",
+          responsePath: "fallback",
           degraded: true,
           reason: "quota_cooldown",
           retryAfterSec,
-          requestId: crypto.randomUUID(),
+          requestId,
         },
       );
     }
@@ -294,6 +353,7 @@ export async function POST(req: NextRequest) {
         {
           query: userQuery,
           cookie: authCookieHeader || undefined,
+          requestId,
           conversationHistory,
           useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
         },
@@ -306,37 +366,70 @@ export async function POST(req: NextRequest) {
         const retryDelayMs = parseRetryDelayMs(error) ?? 30_000;
         aiQuotaCooldownUntil = Date.now() + retryDelayMs;
         const retryAfterSec = Math.max(1, Math.ceil(retryDelayMs / 1000));
+        const latencyMs = Date.now() - startedAt;
+        recordRequestMetric("POST", route, 200, latencyMs);
+        logger.logRequest("POST", route, 200, latencyMs, {
+          requestId,
+          userId: session.user.id,
+          roomId: String(roomId),
+          intent: "fallback",
+          responsePath: "fallback",
+          reason: "quota_exceeded",
+        });
 
         return toChatStreamResponse(
           `ขออภัย โควต้า AI เต็มชั่วคราว กรุณาลองใหม่อีกครั้งในประมาณ ${retryAfterSec} วินาที`,
           {
             intent: "fallback",
+            responsePath: "fallback",
             degraded: true,
             reason: "quota_exceeded",
             retryAfterSec,
-            requestId: crypto.randomUUID(),
+            requestId,
           },
         );
       }
 
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 200, latencyMs);
+      logger.logRequest("POST", route, 200, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomId),
+        intent: "fallback",
+        responsePath: "fallback",
+        reason: "orchestration_error",
+      });
       return toChatStreamResponse(
         "ขออภัย ระบบ AI ตอบช้ากว่าปกติในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่",
         {
           intent: "fallback",
+          responsePath: "fallback",
           degraded: true,
-          requestId: crypto.randomUUID(),
+          requestId,
         },
       );
     }
 
     // Check if content was blocked by guardrails
     if (result.intent === "blocked") {
+      const latencyMs = Date.now() - startedAt;
+      recordRequestMetric("POST", route, 200, latencyMs);
+      logger.logRequest("POST", route, 200, latencyMs, {
+        requestId: result.requestId,
+        userId: session.user.id,
+        roomId: String(roomId),
+        intent: result.intent,
+        responsePath: result.responsePath,
+      });
       return toChatStreamResponse(result.response, {
         intent: "blocked",
+        responsePath: result.responsePath,
         blocked: true,
         violation: result.safetyResult?.violation,
         level: result.safetyResult?.level,
-        requestId: crypto.randomUUID(),
+        timings: result.timings,
+        requestId: result.requestId,
       });
     }
 
@@ -352,16 +445,37 @@ export async function POST(req: NextRequest) {
       .set({ updated_at: new Date() })
       .where(eq(chatRooms.cr_id, roomId));
 
+    const latencyMs = Date.now() - startedAt;
+    recordRequestMetric("POST", route, 200, latencyMs);
+    metrics.counter(METRIC_NAMES.CHAT_MESSAGES_TOTAL, {
+      route: "new-room",
+      intent: result.intent,
+      path: result.responsePath,
+      status: "ok",
+    });
+    logger.logRequest("POST", route, 200, latencyMs, {
+      requestId: result.requestId,
+      userId: session.user.id,
+      roomId: String(roomId),
+      intent: result.intent,
+      responsePath: result.responsePath,
+    });
+
     // Return response — include roomId so the client can navigate to the new room
     return toChatStreamResponse(result.response, {
       intent: result.intent,
+      responsePath: result.responsePath,
+      timings: result.timings,
       sources: result.sources,
       roomId,
-      requestId: crypto.randomUUID(),
+      requestId: result.requestId,
     });
 
   } catch (error) {
-    console.error("[Chat API] Error:", error);
+    const latencyMs = Date.now() - startedAt;
+    recordRequestMetric("POST", route, 500, latencyMs);
+    logger.error("[Chat API] Error", { requestId }, error as Error);
+    logger.logRequest("POST", route, 500, latencyMs, { requestId });
 
     return NextResponse.json(
       {
@@ -375,14 +489,26 @@ export async function POST(req: NextRequest) {
 
 // SSE endpoint for streaming responses
 export async function GET(req: NextRequest) {
+  const requestId = getRequestId(req);
+  const startedAt = Date.now();
+  const route = "/api/chat";
   const cookieHeader = req.headers.get("cookie");
   const authorizationHeader = req.headers.get("authorization");
   const session = await getApiSession(cookieHeader, authorizationHeader);
 
   if (!session) {
+    const latencyMs = Date.now() - startedAt;
+    recordRequestMetric("GET", route, 401, latencyMs);
+    logger.logRequest("GET", route, 401, latencyMs, { requestId });
     return new Response("Unauthorized", { status: 401 });
   }
 
   // For now, return a simple message. Implement SSE streaming in future.
-  return NextResponse.json({ status: "ok", message: "Chat API is running" });
+  const latencyMs = Date.now() - startedAt;
+  recordRequestMetric("GET", route, 200, latencyMs);
+  logger.logRequest("GET", route, 200, latencyMs, {
+    requestId,
+    userId: session.user.id,
+  });
+  return NextResponse.json({ status: "ok", message: "Chat API is running", requestId });
 }

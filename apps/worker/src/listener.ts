@@ -1,7 +1,13 @@
 import type { PoolClient } from "pg";
 import type { RagUpdateEvent, EmbeddingJob } from "./types";
 import { getListenClient } from "./db";
-import { DebouncedQueue } from "./queue";
+import {
+    DebouncedQueue,
+    logWorkerEvent,
+    timeAsync,
+    workerMetrics,
+    type WorkerMetricsSnapshot,
+} from "./queue";
 import { processRecord } from "./embedder";
 import { fetchRecordData, deleteEmbedding, upsertEmbedding } from "./db";
 
@@ -26,11 +32,11 @@ export class RagUpdateListener {
      */
     async start(): Promise<void> {
         if (this.isRunning) {
-            console.log("[Listener] Already running");
+            logWorkerEvent("warn", "listener.already_running", {});
             return;
         }
 
-        console.log("[Listener] Starting...");
+        logWorkerEvent("info", "listener.starting", {});
 
         try {
             // Get dedicated client for LISTEN
@@ -47,9 +53,19 @@ export class RagUpdateListener {
             await this.client.query("LISTEN rag_update");
 
             this.isRunning = true;
-            console.log("[Listener] Listening on 'rag_update' channel");
+            logWorkerEvent("info", "listener.started", {
+                channel: "rag_update",
+            });
         } catch (error) {
-            console.error("[Listener] Error starting:", error);
+            logWorkerEvent("error", "listener.start_failed", {
+                error: error instanceof Error
+                    ? {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack,
+                    }
+                    : { value: error },
+            });
             throw error;
         }
     }
@@ -60,12 +76,27 @@ export class RagUpdateListener {
     private handleNotification(payload: string): void {
         try {
             const event: RagUpdateEvent = JSON.parse(payload);
-            console.log(`[Listener] Received event: ${event.table}:${event.pk} (${event.action})`);
+            workerMetrics.increment("listener.notifications_received");
+            logWorkerEvent("info", "listener.notification_received", {
+                table: event.table,
+                pk: event.pk,
+                action: event.action,
+            });
 
             // Add to queue for debounced processing
             this.queue.add(event);
         } catch (error) {
-            console.error("[Listener] Error parsing notification:", error);
+            workerMetrics.increment("listener.notification_parse_failures");
+            logWorkerEvent("error", "listener.notification_parse_failed", {
+                error: error instanceof Error
+                    ? {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack,
+                    }
+                    : { value: error },
+                payloadPreview: payload.slice(0, 200),
+            });
         }
     }
 
@@ -73,81 +104,177 @@ export class RagUpdateListener {
      * Process a batch of jobs
      */
     private async processJobs(jobs: EmbeddingJob[]): Promise<void> {
-        console.log(`[Listener] Processing ${jobs.length} jobs`);
+        const batchStartedAt = Date.now();
+        workerMetrics.increment("listener.batches_started");
+        workerMetrics.observe("listener.batch_size", jobs.length);
 
-        // Process DELETE actions first
         const deleteJobs = jobs.filter((j) => j.action === "DELETE");
         const otherJobs = jobs.filter((j) => j.action !== "DELETE");
 
-        // Handle deletions
-        for (const job of deleteJobs) {
-            try {
-                await deleteEmbedding(job.table, job.pk);
-                console.log(`[Listener] Deleted embedding for ${job.table}:${job.pk}`);
-            } catch (error) {
-                console.error(`[Listener] Error deleting embedding for ${job.table}:${job.pk}:`, error);
-                throw error;
-            }
-        }
+        logWorkerEvent("info", "listener.batch_started", {
+            jobCount: jobs.length,
+            deleteCount: deleteJobs.length,
+            updateCount: otherJobs.length,
+        });
 
-        // Handle INSERT/UPDATE
-        for (const job of otherJobs) {
-            try {
-                await this.processJob(job);
-            } catch (error) {
-                console.error(`[Listener] Error processing job ${job.id}:`, error);
-                throw error;
+        try {
+            for (const job of deleteJobs) {
+                try {
+                    workerMetrics.increment("listener.delete_jobs_started");
+                    await timeAsync("listener.delete_embedding_ms", () =>
+                        deleteEmbedding(job.table, job.pk),
+                    );
+                    workerMetrics.increment("listener.delete_jobs_succeeded");
+                    workerMetrics.increment("listener.jobs_completed");
+                    logWorkerEvent("info", "listener.embedding_deleted", {
+                        table: job.table,
+                        pk: job.pk,
+                    });
+                } catch (error) {
+                    workerMetrics.increment("listener.delete_jobs_failed");
+                    logWorkerEvent("error", "listener.embedding_delete_failed", {
+                        table: job.table,
+                        pk: job.pk,
+                        error: error instanceof Error
+                            ? {
+                                name: error.name,
+                                message: error.message,
+                                stack: error.stack,
+                            }
+                            : { value: error },
+                    });
+                    throw error;
+                }
             }
-        }
 
-        console.log(`[Listener] Completed processing ${jobs.length} jobs`);
+            for (const job of otherJobs) {
+                try {
+                    await this.processJob(job);
+                } catch (error) {
+                    workerMetrics.increment("listener.update_jobs_failed");
+                    logWorkerEvent("error", "listener.job_failed", {
+                        jobId: job.id,
+                        table: job.table,
+                        pk: job.pk,
+                        error: error instanceof Error
+                            ? {
+                                name: error.name,
+                                message: error.message,
+                                stack: error.stack,
+                            }
+                            : { value: error },
+                    });
+                    throw error;
+                }
+            }
+
+            workerMetrics.increment("listener.batches_succeeded");
+            logWorkerEvent("info", "listener.batch_completed", {
+                jobCount: jobs.length,
+                durationMs: Date.now() - batchStartedAt,
+            });
+        } finally {
+            workerMetrics.observe("listener.batch_ms", Date.now() - batchStartedAt);
+        }
     }
 
     /**
      * Process a single job
      */
     private async processJob(job: EmbeddingJob): Promise<void> {
-        console.log(`[Listener] Processing job: ${job.id}`);
+        const startedAt = Date.now();
+        workerMetrics.increment("listener.jobs_started");
+        logWorkerEvent("debug", "listener.job_started", {
+            jobId: job.id,
+            table: job.table,
+            pk: job.pk,
+            action: job.action,
+            retryCount: job.retryCount,
+        });
 
-        // Fetch record data from database
-        const recordData = await fetchRecordData(job.table, job.pk);
+        let completed = false;
 
-        if (!recordData) {
-            console.warn(`[Listener] Record not found: ${job.table}:${job.pk}`);
-            // If record doesn't exist, delete any existing embedding
-            await deleteEmbedding(job.table, job.pk);
-            return;
+        try {
+            // Fetch record data from database
+            const recordData = await timeAsync("listener.fetch_record_ms", () =>
+                fetchRecordData(job.table, job.pk),
+            );
+
+            if (!recordData) {
+                workerMetrics.increment("listener.records_missing");
+                logWorkerEvent("warn", "listener.record_missing", {
+                    jobId: job.id,
+                    table: job.table,
+                    pk: job.pk,
+                });
+                // If record doesn't exist, delete any existing embedding
+                await timeAsync("listener.delete_missing_record_ms", () =>
+                    deleteEmbedding(job.table, job.pk),
+                );
+                workerMetrics.increment("listener.records_missing_deleted");
+                workerMetrics.increment("listener.jobs_completed_without_upsert");
+                workerMetrics.increment("listener.jobs_completed");
+                completed = true;
+                return;
+            }
+
+            // Generate embeddings
+            const embeddingResults = await timeAsync("listener.process_record_ms", () =>
+                processRecord(recordData),
+            );
+            workerMetrics.observe("listener.record_chunk_count", embeddingResults.length);
+
+            if (embeddingResults.length === 0) {
+                workerMetrics.increment("listener.zero_embedding_results");
+                logWorkerEvent("warn", "listener.record_produced_no_embeddings", {
+                    jobId: job.id,
+                    table: job.table,
+                    pk: job.pk,
+                });
+                workerMetrics.increment("listener.jobs_completed_without_upsert");
+                workerMetrics.increment("listener.jobs_completed");
+                completed = true;
+                return;
+            }
+
+            // For simplicity, we use the first chunk's embedding
+            // In production, you might want to store all chunks
+            const result = embeddingResults[0];
+
+            // Upsert to database
+            await timeAsync("listener.upsert_embedding_ms", () =>
+                upsertEmbedding(
+                    result.sourceTable,
+                    result.sourcePk,
+                    result.content,
+                    result.embedding,
+                    result.sourceUpdatedAt,
+                ),
+            );
+
+            workerMetrics.increment("listener.jobs_succeeded");
+            workerMetrics.increment("listener.jobs_completed");
+            completed = true;
+            logWorkerEvent("info", "listener.job_completed", {
+                jobId: job.id,
+                table: job.table,
+                pk: job.pk,
+                chunkCount: embeddingResults.length,
+                durationMs: Date.now() - startedAt,
+            });
+        } finally {
+            workerMetrics.observe("listener.job_ms", Date.now() - startedAt);
+            if (!completed) {
+                workerMetrics.increment("listener.jobs_failed");
+            }
         }
-
-        // Generate embeddings
-        const embeddingResults = await processRecord(recordData);
-
-        if (embeddingResults.length === 0) {
-            console.warn(`[Listener] No embeddings generated for ${job.table}:${job.pk}`);
-            return;
-        }
-
-        // For simplicity, we use the first chunk's embedding
-        // In production, you might want to store all chunks
-        const result = embeddingResults[0];
-
-        // Upsert to database
-        await upsertEmbedding(
-            result.sourceTable,
-            result.sourcePk,
-            result.content,
-            result.embedding,
-            result.sourceUpdatedAt
-        );
-
-        console.log(`[Listener] Processed job: ${job.id}`);
     }
 
     /**
      * Stop the listener
      */
     async stop(): Promise<void> {
-        console.log("[Listener] Stopping...");
+        logWorkerEvent("info", "listener.stopping", {});
 
         this.isRunning = false;
 
@@ -161,13 +288,16 @@ export class RagUpdateListener {
             this.client = null;
         }
 
-        console.log("[Listener] Stopped");
+        logWorkerEvent("info", "listener.stopped", {});
     }
 
     /**
      * Get current stats
      */
-    getStats(): { isRunning: boolean; queueStats: { pending: number; isProcessing: boolean } } {
+    getStats(): {
+        isRunning: boolean;
+        queueStats: { pending: number; isProcessing: boolean; metrics: WorkerMetricsSnapshot };
+    } {
         return {
             isRunning: this.isRunning,
             queueStats: this.queue.getStats(),

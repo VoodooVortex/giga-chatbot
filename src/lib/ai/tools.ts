@@ -6,6 +6,7 @@
 import {
     getDevices,
     getDevice,
+    getDeviceWithChilds,
     getBorrowAvailableDeviceChildren,
     getBorrowDeviceSummary,
     getBorrowInventory,
@@ -14,7 +15,39 @@ import {
     getNotifications,
     markNotificationsAsRead
 } from "@/lib/api-client";
+import { logger } from "@/lib/observability/logger";
+import { logToolCall } from "@/lib/observability/audit";
+import { metrics } from "@/lib/observability/metrics";
 import type { ToolDefinition, ToolCall } from "./types";
+
+const TOOL_REQUEST_METRIC = "tool_requests_total";
+const TOOL_DURATION_METRIC = "tool_request_duration_ms";
+
+function normalizeLookupValue(value: string | null | undefined): string {
+    return (value ?? "")
+        .toLowerCase()
+        .replace(/[\s/_-]+/g, "")
+        .trim();
+}
+
+function matchesDeviceSearch(
+    search: string,
+    fields: Array<string | null | undefined>
+): boolean {
+    const rawTerm = search.trim().toLowerCase();
+    if (!rawTerm) return false;
+
+    const normalizedTerm = normalizeLookupValue(search);
+
+    return fields.some((field) => {
+        const rawField = (field ?? "").toLowerCase();
+        if (!rawField) return false;
+        if (rawField.includes(rawTerm)) return true;
+
+        const normalizedField = normalizeLookupValue(field);
+        return normalizedTerm.length > 0 && normalizedField.includes(normalizedTerm);
+    });
+}
 
 // Tool definitions for Gemini function calling
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -239,19 +272,16 @@ export async function executeTool(
             }
 
             if (search && search.trim()) {
-                const term = search.toLowerCase();
                 result = result.filter((d) => {
-                    const haystack = [
+                    const fields = [
                         d.de_name,
                         d.de_serial_number,
                         d.de_location,
                         d.category,
                         d.department ?? "",
                         d.sub_section ?? "",
-                    ]
-                        .join(" ")
-                        .toLowerCase();
-                    return haystack.includes(term);
+                    ];
+                    return matchesDeviceSearch(search, fields);
                 });
             }
 
@@ -307,21 +337,23 @@ export async function executeTool(
 
             for (let i = 0; i < scanList.length; i++) {
                 const device = scanList[i];
-                const children = await getBorrowAvailableDeviceChildren(device.de_id, cookie);
+                const deviceWithChilds = await getDeviceWithChilds(device.de_id, cookie);
+                const children = Array.isArray(deviceWithChilds?.device_childs)
+                    ? deviceWithChilds.device_childs
+                    : [];
                 const match = children.find(
                     (child) => (child.dec_asset_code || "").toUpperCase() === target
                 );
 
                 if (match) {
                     const isReady = match.dec_status === "READY";
-                    const hasActiveBorrow = Array.isArray(match.activeBorrow) && match.activeBorrow.length > 0;
                     return {
                         asset_code: target,
                         matches: [
                             {
                                 device,
                                 child: match,
-                                available: isReady && !hasActiveBorrow,
+                                available: isReady,
                             },
                         ],
                         scanned: i + 1,
@@ -436,23 +468,50 @@ export async function executeTool(
  */
 export async function executeToolCalls(
     toolCalls: Array<{ tool: string; params: Record<string, unknown> }>,
-    cookie?: string
+    cookie?: string,
+    context?: { requestId?: string }
 ): Promise<ToolCall[]> {
     const results: ToolCall[] = [];
 
     for (const call of toolCalls) {
+        const startedAt = Date.now();
         try {
             const result = await executeTool(call.tool, call.params, cookie);
+            const durationMs = Date.now() - startedAt;
+            recordToolMetrics(call.tool, "success", durationMs);
+            if (context?.requestId) {
+                logToolCall(call.tool, call.params, result, {
+                    requestId: context.requestId,
+                });
+            }
+            logger.info("[Tools] tool call succeeded", {
+                requestId: context?.requestId,
+                tool: call.tool,
+                durationMs,
+            });
             results.push({
                 tool: call.tool,
                 params: call.params,
                 result
             });
         } catch (error) {
+            const durationMs = Date.now() - startedAt;
             console.error("[Tools] Tool call failed:", {
                 tool: call.tool,
                 params: call.params,
                 error: error instanceof Error ? error.message : error,
+            });
+            recordToolMetrics(call.tool, "error", durationMs);
+            if (context?.requestId) {
+                logToolCall(call.tool, call.params, undefined, {
+                    requestId: context.requestId,
+                });
+            }
+            logger.warn("[Tools] tool call failed", {
+                requestId: context?.requestId,
+                tool: call.tool,
+                durationMs,
+                error: error instanceof Error ? error.message : "Unknown error",
             });
             results.push({
                 tool: call.tool,
@@ -463,4 +522,10 @@ export async function executeToolCalls(
     }
 
     return results;
+}
+
+function recordToolMetrics(tool: string, status: "success" | "error", durationMs: number): void {
+    const labels = { tool, status };
+    metrics.counter(TOOL_REQUEST_METRIC, labels);
+    metrics.histogram(TOOL_DURATION_METRIC, durationMs, labels);
 }

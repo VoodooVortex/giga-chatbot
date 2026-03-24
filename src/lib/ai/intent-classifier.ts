@@ -130,6 +130,7 @@ async function classifyIntentWithOpenRouter(query: string): Promise<string> {
 
 function classifyIntentHeuristic(query: string): ClassifiedIntent {
     const normalized = query.toLowerCase();
+    const deviceId = extractNumericDeviceId(query);
 
     const hasNotification = /แจ้งเตือน|notification|alert/i.test(normalized);
     const hasTicket = /ticket|issue|ปัญหา|งานซ่อม|incident|request/i.test(normalized);
@@ -152,11 +153,14 @@ function classifyIntentHeuristic(query: string): ClassifiedIntent {
         };
     }
 
-    if (hasDevice || hasAvailability) {
+    if (hasDevice || hasAvailability || deviceId) {
         return {
             intent: "device_lookup",
-            confidence: 0.9,
-            entities: { keywords: extractKeywords(query) }
+            confidence: deviceId ? 0.98 : 0.9,
+            entities: {
+                deviceId: deviceId ?? undefined,
+                keywords: extractKeywords(query)
+            }
         };
     }
 
@@ -165,6 +169,26 @@ function classifyIntentHeuristic(query: string): ClassifiedIntent {
         confidence: 0.65,
         entities: { keywords: extractKeywords(query) }
     };
+}
+
+function extractNumericDeviceId(query: string): string | undefined {
+    const trimmed = query.trim();
+    if (!trimmed) return undefined;
+
+    const deviceIdPatterns = [
+        /\b(?:device\s*id|id|asset|serial|tag)\b\s*[#:=-]?\s*(\d{1,8})\b/i,
+        /(?:อุปกรณ์|เครื่อง|รหัส)\s*[#:=-]?\s*(\d{1,8})\b/i,
+        /\b(?:device|asset|serial|tag)\b\s*[#:=-]?\s*(\d{1,8})\b/i,
+    ];
+
+    for (const pattern of deviceIdPatterns) {
+        const match = trimmed.match(pattern);
+        if (match?.[1]) {
+            return match[1];
+        }
+    }
+
+    return undefined;
 }
 
 function extractKeywords(query: string): string[] {
@@ -191,7 +215,7 @@ function extractKeywords(query: string): string[] {
 
     return query
         .toLowerCase()
-        .replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s]/g, " ")
+        .replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s/_-]/g, " ")
         .split(/\s+/)
         .filter(word => word.length > 1 && !commonWords.has(word));
 }

@@ -5,17 +5,45 @@
  */
 
 import { classifyIntent } from "./intent-classifier";
-import { retrieveRAGContext, retrieveHybridContext } from "./rag-retriever";
+import {
+  retrieveRAGContextWithTelemetry,
+  retrieveHybridContextWithTelemetry,
+  type RAGRetrievalResult,
+  type RAGRetrievalTelemetry,
+} from "./rag-retriever";
 import { executeTool, executeToolCalls } from "./tools";
 import { generateResponse } from "./response-generator";
 import { runSafetyChecks, getBlockedResponse } from "@/lib/safety/guardrails";
 import { env } from "@/lib/config";
+import { logger } from "@/lib/observability/logger";
+import { logAIResponse } from "@/lib/observability/audit";
+import { metrics, METRIC_NAMES } from "@/lib/observability/metrics";
 import type { ClassifiedIntent, RAGContext, ToolCall } from "./types";
 import type { SafetyCheckResult } from "@/lib/safety/guardrails";
+
+type ResponsePath =
+  | "blocked"
+  | "clarification"
+  | "deterministic_list"
+  | "deterministic_notification"
+  | "deterministic_asset"
+  | "deterministic_availability"
+  | "llm"
+  | "fallback";
+
+interface PipelineTimings {
+  safetyMs: number;
+  intentMs: number;
+  ragMs: number;
+  toolMs: number;
+  responseMs: number;
+  totalMs: number;
+}
 
 interface OrchestratorOptions {
   query: string;
   cookie?: string;
+  requestId?: string;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   useHybridSearch?: boolean;
   skipSafetyCheck?: boolean;
@@ -24,6 +52,14 @@ interface OrchestratorOptions {
 interface OrchestratorResult {
   response: string;
   intent: string;
+  requestId: string;
+  responsePath: ResponsePath;
+  timings: PipelineTimings;
+  telemetry?: {
+    rag?: RAGRetrievalTelemetry;
+    toolCount: number;
+    toolErrors: number;
+  };
   sources: {
     rag?: RAGContext[];
     tools?: ToolCall[];
@@ -41,71 +77,127 @@ export async function orchestrate(
   const {
     query,
     cookie,
+    requestId,
     conversationHistory,
     useHybridSearch = true,
     skipSafetyCheck = false,
   } = options;
+  const pipelineStartedAt = Date.now();
+  const resolvedRequestId = requestId ?? crypto.randomUUID();
+  const requestLogger = logger.child({ requestId: resolvedRequestId });
+  const timings: PipelineTimings = createEmptyTimings();
+  let responsePath: ResponsePath = "llm";
+  let finalIntent = "general_question";
+  let finalSources: { rag?: RAGContext[]; tools?: ToolCall[] } = {};
 
   // Step 0: Content Safety Check
   if (!skipSafetyCheck) {
-    console.log("[AI Orchestrator] Step 0: Running content safety checks...");
+    requestLogger.info("[AI Orchestrator] Step 0: Running content safety checks");
+    const safetyStartedAt = Date.now();
     const safetyResult = runSafetyChecks(query);
+    timings.safetyMs = Date.now() - safetyStartedAt;
 
     if (!safetyResult.isSafe) {
-      console.warn(`[AI Orchestrator] Content blocked: ${safetyResult.violation}`);
-      return {
-        response: getBlockedResponse(safetyResult.violation || "unknown"),
-        intent: "blocked",
-        sources: {},
+      const response = getBlockedResponse(safetyResult.violation || "unknown");
+      responsePath = "blocked";
+      finalIntent = "blocked";
+      timings.totalMs = Date.now() - pipelineStartedAt;
+      return finalizeOrchestratorResult({
+        requestId: resolvedRequestId,
+        query,
+        intent: finalIntent,
+        response,
+        responsePath,
+        timings,
+        sources: finalSources,
         safetyResult,
-      };
+      });
     }
 
-    console.log("[AI Orchestrator] Content safety checks passed");
+    requestLogger.info("[AI Orchestrator] Content safety checks passed", {
+      safetyMs: timings.safetyMs,
+    });
   }
 
   // Step 1: Classify Intent
-  console.log("[AI Orchestrator] Step 1: Classifying intent...");
+  requestLogger.info("[AI Orchestrator] Step 1: Classifying intent");
+  const intentStartedAt = Date.now();
   const intent = await classifyIntent(query);
-  console.log(
-    `[AI Orchestrator] Intent: ${intent.intent} (confidence: ${intent.confidence})`,
-  );
+  timings.intentMs = Date.now() - intentStartedAt;
+  finalIntent = intent.intent;
+  requestLogger.info("[AI Orchestrator] Intent classified", {
+    intent: intent.intent,
+    confidence: intent.confidence,
+    intentMs: timings.intentMs,
+  });
 
   const clarification = getClarificationResponse(intent, query);
   if (clarification) {
-    return {
-      response: clarification,
+    responsePath = "clarification";
+    timings.totalMs = Date.now() - pipelineStartedAt;
+    return finalizeOrchestratorResult({
+      requestId: resolvedRequestId,
+      query,
       intent: "clarification",
-      sources: {},
-    };
+      response: clarification,
+      responsePath,
+      timings,
+      sources: finalSources,
+    });
   }
 
   // Step 2: Parallel execution based on intent
-  const [ragContexts, toolResults] = await Promise.all([
+  const ragStartedAt = Date.now();
+  const toolStartedAt = Date.now();
+  const [ragResult, toolResults] = await Promise.all([
     // RAG Retrieval (for general questions)
     shouldUseRAG(intent.intent)
-      ? retrieveContext(query, useHybridSearch)
-      : Promise.resolve([]),
+      ? retrieveContextWithTelemetry(query, useHybridSearch, resolvedRequestId)
+      : Promise.resolve(null),
 
     // Tool Execution (for specific intents)
     shouldUseTools(intent.intent)
-      ? executeToolsForIntent(intent, query, cookie)
+      ? executeToolsForIntent(intent, query, cookie, resolvedRequestId)
       : Promise.resolve([]),
   ]);
 
-  console.log(`[AI Orchestrator] Retrieved ${ragContexts.length} RAG contexts`);
-  console.log(`[AI Orchestrator] Executed ${toolResults.length} tool calls`);
+  const ragTelemetry = ragResult?.telemetry;
+  const ragContexts = ragResult?.contexts ?? [];
+  timings.ragMs = shouldUseRAG(intent.intent)
+    ? ragTelemetry?.durationMs ?? Date.now() - ragStartedAt
+    : 0;
+  timings.toolMs = shouldUseTools(intent.intent) ? Date.now() - toolStartedAt : 0;
+
+  finalSources = {
+    rag: ragContexts.length > 0 ? ragContexts : undefined,
+    tools: toolResults.length > 0 ? toolResults : undefined,
+  };
+
+  requestLogger.info("[AI Orchestrator] Retrieval and tools complete", {
+    ragCount: ragContexts.length,
+    toolCount: toolResults.length,
+    ragMs: timings.ragMs,
+    toolMs: timings.toolMs,
+    topSimilarity: ragTelemetry?.topSimilarity,
+    averageSimilarity: ragTelemetry?.averageSimilarity,
+    zeroHit: ragTelemetry?.zeroHit,
+  });
 
   const deterministicResponse = buildDeterministicListResponse(query, toolResults);
   if (deterministicResponse) {
-    return {
-      response: deterministicResponse,
+    responsePath = "deterministic_list";
+    timings.responseMs = 0;
+    timings.totalMs = Date.now() - pipelineStartedAt;
+    return finalizeOrchestratorResult({
+      requestId: resolvedRequestId,
+      query,
       intent: intent.intent,
-      sources: {
-        rag: ragContexts.length > 0 ? ragContexts : undefined,
-        tools: toolResults.length > 0 ? toolResults : undefined,
-      },
-    };
+      response: deterministicResponse,
+      responsePath,
+      timings,
+      sources: finalSources,
+      ragTelemetry,
+    });
   }
 
   const notificationResponse = buildDeterministicNotificationResponse(
@@ -114,14 +206,18 @@ export async function orchestrate(
     toolResults,
   );
   if (notificationResponse) {
-    return {
-      response: notificationResponse,
+    responsePath = "deterministic_notification";
+    timings.totalMs = Date.now() - pipelineStartedAt;
+    return finalizeOrchestratorResult({
+      requestId: resolvedRequestId,
+      query,
       intent: intent.intent,
-      sources: {
-        rag: ragContexts.length > 0 ? ragContexts : undefined,
-        tools: toolResults.length > 0 ? toolResults : undefined,
-      },
-    };
+      response: notificationResponse,
+      responsePath,
+      timings,
+      sources: finalSources,
+      ragTelemetry,
+    });
   }
 
   const assetResponse = buildDeterministicAssetResponse(
@@ -130,18 +226,43 @@ export async function orchestrate(
     toolResults,
   );
   if (assetResponse) {
-    return {
-      response: assetResponse,
+    responsePath = "deterministic_asset";
+    timings.totalMs = Date.now() - pipelineStartedAt;
+    return finalizeOrchestratorResult({
+      requestId: resolvedRequestId,
+      query,
       intent: intent.intent,
-      sources: {
-        rag: ragContexts.length > 0 ? ragContexts : undefined,
-        tools: toolResults.length > 0 ? toolResults : undefined,
-      },
-    };
+      response: assetResponse,
+      responsePath,
+      timings,
+      sources: finalSources,
+      ragTelemetry,
+    });
+  }
+
+  const availabilityResponse = buildDeterministicAvailabilityResponse(
+    intent.intent,
+    query,
+    toolResults,
+  );
+  if (availabilityResponse) {
+    responsePath = "deterministic_availability";
+    timings.totalMs = Date.now() - pipelineStartedAt;
+    return finalizeOrchestratorResult({
+      requestId: resolvedRequestId,
+      query,
+      intent: intent.intent,
+      response: availabilityResponse,
+      responsePath,
+      timings,
+      sources: finalSources,
+      ragTelemetry,
+    });
   }
 
   // Step 3: Generate Response
-  console.log("[AI Orchestrator] Step 3: Generating response...");
+  requestLogger.info("[AI Orchestrator] Step 3: Generating response");
+  const responseStartedAt = Date.now();
   const response = await generateResponse({
     query,
     intent: intent.intent,
@@ -149,15 +270,20 @@ export async function orchestrate(
     toolResults: toolResults.length > 0 ? toolResults : undefined,
     conversationHistory,
   });
+  timings.responseMs = Date.now() - responseStartedAt;
+  responsePath = "llm";
+  timings.totalMs = Date.now() - pipelineStartedAt;
 
-  return {
-    response,
+  return finalizeOrchestratorResult({
+    requestId: resolvedRequestId,
+    query,
     intent: intent.intent,
-    sources: {
-      rag: ragContexts.length > 0 ? ragContexts : undefined,
-      tools: toolResults.length > 0 ? toolResults : undefined,
-    },
-  };
+    response,
+    responsePath,
+    timings,
+    sources: finalSources,
+    ragTelemetry,
+  });
 }
 
 /**
@@ -202,17 +328,36 @@ async function retrieveContext(
   useHybrid: boolean,
 ): Promise<RAGContext[]> {
   try {
-    if (useHybrid) {
-      return await retrieveHybridContext(query, {
-        topK: 5,
-        minSimilarity: 0.6,
-      });
-    } else {
-      return await retrieveRAGContext(query, { topK: 5, minSimilarity: 0.7 });
-    }
+    const result = await retrieveContextWithTelemetry(query, useHybrid);
+    return result?.contexts ?? [];
   } catch (error) {
     console.error("[AI Orchestrator] RAG retrieval failed:", error);
     return [];
+  }
+}
+
+async function retrieveContextWithTelemetry(
+  query: string,
+  useHybrid: boolean,
+  requestId?: string,
+): Promise<RAGRetrievalResult | null> {
+  try {
+    if (useHybrid) {
+      return await retrieveHybridContextWithTelemetry(query, {
+        topK: 5,
+        minSimilarity: 0.6,
+        requestId,
+      });
+    }
+
+    return await retrieveRAGContextWithTelemetry(query, {
+      topK: 5,
+      minSimilarity: 0.7,
+      requestId,
+    });
+  } catch (error) {
+    console.error("[AI Orchestrator] RAG retrieval failed:", error);
+    return null;
   }
 }
 
@@ -223,9 +368,10 @@ async function executeToolsForIntent(
   intent: ClassifiedIntent,
   query: string,
   cookie?: string,
+  requestId?: string,
 ): Promise<ToolCall[]> {
   if (intent.intent === "device_lookup") {
-    return executeDeviceLookupTools(intent, query, cookie);
+    return executeDeviceLookupTools(intent, query, cookie, requestId);
   }
 
   switch (intent.intent) {
@@ -244,6 +390,7 @@ async function executeToolsForIntent(
       return await executeToolCalls(
         [{ tool: "search_issues", params }],
         cookie,
+        { requestId },
       );
     }
 
@@ -257,6 +404,7 @@ async function executeToolsForIntent(
           },
         ],
         cookie,
+        { requestId },
       );
     }
   }
@@ -268,13 +416,15 @@ async function executeDeviceLookupTools(
   intent: ClassifiedIntent,
   query: string,
   cookie?: string,
+  requestId?: string,
 ): Promise<ToolCall[]> {
   const results: ToolCall[] = [];
   const wantsAvailability = isAvailabilityQuery(query);
   const wantsDetails = isDetailQuery(query);
-  const wantsListAll = isListAllAvailabilityQuery(query);
+  const wantsListAllAvailability = isListAllAvailabilityQuery(query);
+  const wantsListAllDevices = isListAllDevicesQuery(query);
   const deviceId = parseNumericId(intent.entities.deviceId);
-  const searchTerm = buildDeviceSearchTerm(intent);
+  const searchTerm = buildDeviceSearchTerm(query, intent);
   const assetCode = extractAssetCode(query);
   const dateRange = wantsAvailability ? extractDateRange(query) : null;
 
@@ -283,6 +433,7 @@ async function executeDeviceLookupTools(
       "find_device_child_by_asset_code",
       { asset_code: assetCode },
       cookie,
+      requestId,
     );
     results.push(assetResult);
 
@@ -294,6 +445,7 @@ async function executeDeviceLookupTools(
             "get_device_details",
             { device_id: match.device.de_id },
             cookie,
+            requestId,
           ),
         );
       }
@@ -304,19 +456,26 @@ async function executeDeviceLookupTools(
             "get_device_borrow_summary",
             { device_id: match.device.de_id },
             cookie,
+            requestId,
           ),
         );
 
         if (dateRange) {
+          const childId =
+            typeof (match.child as { dec_id?: number } | undefined)?.dec_id === "number"
+              ? (match.child as { dec_id: number }).dec_id
+              : undefined;
           results.push(
             await safeExecuteTool(
               "get_device_available_for_ticket",
               {
                 device_id: match.device.de_id,
+                device_child_ids: childId ? [childId] : undefined,
                 start_date: dateRange.startDate,
                 end_date: dateRange.endDate,
               },
               cookie,
+              requestId,
             ),
           );
         }
@@ -326,7 +485,7 @@ async function executeDeviceLookupTools(
     return results;
   }
 
-  if (wantsListAll && !deviceId) {
+  if ((wantsListAllAvailability || wantsListAllDevices) && !deviceId) {
     const listParams: Record<string, unknown> = {
       only_available: wantsAvailability,
     };
@@ -336,7 +495,12 @@ async function executeDeviceLookupTools(
     }
 
     results.push(
-      await safeExecuteTool("list_devices_with_availability", listParams, cookie),
+      await safeExecuteTool(
+        "list_devices_with_availability",
+        listParams,
+        cookie,
+        requestId,
+      ),
     );
     return results;
   }
@@ -349,31 +513,41 @@ async function executeDeviceLookupTools(
             "get_device_details",
             { device_id: deviceId },
             cookie,
+            requestId,
           ),
         );
       }
-      results.push(await safeExecuteTool("get_device_borrow_summary", { device_id: deviceId }, cookie));
+      results.push(
+        await safeExecuteTool(
+          "get_device_borrow_summary",
+          { device_id: deviceId },
+          cookie,
+          requestId,
+        ),
+      );
 
       if (dateRange) {
         results.push(
           await safeExecuteTool(
             "get_device_available_for_ticket",
             {
-              device_id: deviceId,
-              start_date: dateRange.startDate,
-              end_date: dateRange.endDate,
-            },
+                device_id: deviceId,
+                start_date: dateRange.startDate,
+                end_date: dateRange.endDate,
+              },
+              cookie,
+              requestId,
+            ),
+          );
+        } else {
+          const availability = await safeExecuteTool(
+            "get_device_children_availability",
+            { device_id: deviceId },
             cookie,
-          ),
-        );
-      } else {
-        const availability = await safeExecuteTool(
-          "get_device_children_availability",
-          { device_id: deviceId },
-          cookie,
-        );
-        results.push(filterAvailableChildren(availability));
-      }
+            requestId,
+          );
+          results.push(filterAvailableChildren(availability));
+        }
 
       return results;
     }
@@ -381,8 +555,12 @@ async function executeDeviceLookupTools(
     if (searchTerm) {
       const list = await safeExecuteTool(
         "list_devices_with_availability",
-        { search: searchTerm, only_available: true },
+        {
+          search: searchTerm,
+          only_available: dateRange ? false : true,
+        },
         cookie,
+        requestId,
       );
       results.push(list);
 
@@ -395,6 +573,7 @@ async function executeDeviceLookupTools(
               "get_device_details",
               { device_id: resolvedId },
               cookie,
+              requestId,
             ),
           );
         }
@@ -403,6 +582,7 @@ async function executeDeviceLookupTools(
             "get_device_borrow_summary",
             { device_id: resolvedId },
             cookie,
+            requestId,
           ),
         );
 
@@ -416,6 +596,7 @@ async function executeDeviceLookupTools(
                 end_date: dateRange.endDate,
               },
               cookie,
+              requestId,
             ),
           );
         } else {
@@ -423,6 +604,7 @@ async function executeDeviceLookupTools(
             "get_device_children_availability",
             { device_id: resolvedId },
             cookie,
+            requestId,
           );
           results.push(filterAvailableChildren(availability));
         }
@@ -436,21 +618,56 @@ async function executeDeviceLookupTools(
         "list_devices_with_availability",
         { only_available: true },
         cookie,
+        requestId,
       ),
     );
     return results;
   }
 
   if (deviceId) {
-    results.push(await safeExecuteTool("get_device_details", { device_id: deviceId }, cookie));
+    results.push(
+      await safeExecuteTool(
+        "get_device_details",
+        { device_id: deviceId },
+        cookie,
+        requestId,
+      ),
+    );
     return results;
   }
 
   if (searchTerm) {
+    if (looksLikeStrongDeviceReference(searchTerm)) {
+      const fallbackList = await safeExecuteTool(
+        "list_devices_with_availability",
+        { search: searchTerm, limit: 10 },
+        cookie,
+        requestId,
+      );
+      results.push(fallbackList);
+
+      if (wantsDetails) {
+        const matches = getArrayResult<{ de_id?: number }>(fallbackList);
+        if (matches.length === 1 && typeof matches[0]?.de_id === "number") {
+          results.push(
+            await safeExecuteTool(
+              "get_device_details",
+              { device_id: matches[0].de_id },
+              cookie,
+              requestId,
+            ),
+          );
+        }
+      }
+
+      return results;
+    }
+
     const search = await safeExecuteTool(
       "search_devices",
       { search: searchTerm, limit: 10 },
       cookie,
+      requestId,
     );
     results.push(search);
 
@@ -462,6 +679,7 @@ async function executeDeviceLookupTools(
             "get_device_details",
             { device_id: matches[0].de_id },
             cookie,
+            requestId,
           ),
         );
       }
@@ -470,7 +688,9 @@ async function executeDeviceLookupTools(
     return results;
   }
 
-  results.push(await safeExecuteTool("search_devices", { limit: 10 }, cookie));
+  results.push(
+    await safeExecuteTool("search_devices", { limit: 10 }, cookie, requestId),
+  );
   return results;
 }
 
@@ -483,7 +703,7 @@ function getClarificationResponse(
   const wantsAvailability = isAvailabilityQuery(query);
   const wantsDetails = isDetailQuery(query);
   const deviceId = parseNumericId(intent.entities.deviceId);
-  const searchTerm = buildDeviceSearchTerm(intent);
+  const searchTerm = buildDeviceSearchTerm(query, intent);
   const assetCode = extractAssetCode(query);
   const dateRange = extractDateRange(query);
 
@@ -492,6 +712,9 @@ function getClarificationResponse(
   }
 
   if (wantsAvailability && !deviceId && !searchTerm) {
+    if (dateRange) {
+      return "ถ้าต้องการเช็คอุปกรณ์ว่างตามช่วงวัน กรุณาระบุชื่อรุ่นหรือรหัสอุปกรณ์ก่อนครับ เช่น “MacBook ว่างพรุ่งนี้ไหม”";
+    }
     if (isListAllAvailabilityQuery(query)) {
       return null;
     }
@@ -529,9 +752,18 @@ function parseNumericId(value?: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
+function buildDeviceSearchTerm(
+  query: string,
+  intent: ClassifiedIntent,
+): string | undefined {
   if (intent.entities.deviceName?.trim()) {
-    return intent.entities.deviceName.trim();
+    const normalized = normalizeDeviceSearchTerm(intent.entities.deviceName);
+    return normalized || undefined;
+  }
+
+  const strongReference = extractStrongDeviceReference(query);
+  if (strongReference) {
+    return strongReference;
   }
 
   const rawKeywords = intent.entities.keywords ?? [];
@@ -590,6 +822,41 @@ function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
     "ที่",
     "ให้",
     "ด้วย",
+    "อะไร",
+    "บ้าง",
+    "ไหน",
+    "ขณะนี้",
+    "วันที่",
+    "วัน",
+    "เวลา",
+  ]);
+
+  const temporalTerms = new Set([
+    "วันนี้",
+    "พรุ่งนี้",
+    "มะรืน",
+    "เมื่อวาน",
+    "สัปดาห์",
+    "อาทิตย์",
+    "เดือน",
+    "ปี",
+    "หน้า",
+    "นี้",
+    "ช่วง",
+    "ระหว่าง",
+    "ถึง",
+    "จนถึง",
+    "from",
+    "to",
+    "today",
+    "tomorrow",
+    "next",
+    "this",
+    "week",
+    "month",
+    "day",
+    "time",
+    "date",
   ]);
 
   const trailingParticles = /(นะครับ|นะคะ|ครับ|ค่ะ|คะ|นะ|ไหม|มั้ย|รึเปล่า|หรือเปล่า|หรือปล่าว|เปล่า|ปะ|มะ)$/i;
@@ -611,6 +878,8 @@ function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
     normalized = stripSubstrings(normalized, Array.from(listTerms));
     normalized = stripSubstrings(normalized, Array.from(availabilityTerms));
     normalized = stripSubstrings(normalized, Array.from(genericDeviceTerms));
+    normalized = stripSubstrings(normalized, Array.from(temporalTerms));
+    normalized = normalized.replace(/\b\d+\b/g, "");
     return normalized.trim();
   };
 
@@ -620,10 +889,63 @@ function buildDeviceSearchTerm(intent: ClassifiedIntent): string | undefined {
     .filter((word) => !availabilityTerms.has(word.toLowerCase()))
     .filter((word) => !listTerms.has(word.toLowerCase()))
     .filter((word) => !genericDeviceTerms.has(word.toLowerCase()))
-    .filter((word) => !fillerTerms.has(word.toLowerCase()));
+    .filter((word) => !fillerTerms.has(word.toLowerCase()))
+    .filter((word) => !temporalTerms.has(word.toLowerCase()));
 
   const term = cleaned.join(" ").trim();
-  return term || intent.entities.deviceId?.trim();
+  return normalizeDeviceSearchTerm(term) || intent.entities.deviceId?.trim();
+}
+
+function normalizeDeviceSearchTerm(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function looksLikeStrongDeviceReference(value: string): boolean {
+  return isStrongDeviceToken(value);
+}
+
+function extractStrongDeviceReference(query: string): string | null {
+  const assetCode = extractAssetCode(query);
+  if (assetCode) return assetCode;
+
+  const stopTokens = new Set([
+    "list",
+    "show",
+    "all",
+    "items",
+    "devices",
+    "device",
+    "อุปกรณ์",
+    "ทั้งหมด",
+    "รายการ",
+    "แสดง",
+    "รวม",
+  ]);
+
+  const candidates = Array.from(
+    query.matchAll(/\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b|\b[A-Za-z0-9]{3,}\b/g),
+    (match) => match[0],
+  );
+
+  for (const candidate of candidates) {
+    if (stopTokens.has(candidate.toLowerCase())) {
+      continue;
+    }
+    if (isStrongDeviceToken(candidate)) {
+      return candidate.toUpperCase();
+    }
+  }
+
+  return null;
+}
+
+function isStrongDeviceToken(token: string): boolean {
+  const normalized = token.trim();
+  if (normalized.length < 3) return false;
+  if (/^ASSET-[A-Z0-9]+(?:-[A-Z0-9]+)+$/i.test(normalized)) return true;
+  if (/^[A-Z0-9]+(?:-[A-Z0-9]+)+$/i.test(normalized)) return true;
+  if (/^(?=.*\d)[A-Z0-9]+(?:-[A-Z0-9]+)*$/i.test(normalized)) return true;
+  return false;
 }
 
 function extractAssetCode(query: string): string | null {
@@ -636,12 +958,28 @@ function extractAssetCode(query: string): string | null {
 
 function extractAssetMatch(
   call: ToolCall,
-): { device?: { de_id?: number }; child?: { dec_asset_code?: string }; available?: boolean } | null {
+): {
+  device?: { de_id?: number };
+  child?: {
+    dec_id?: number;
+    dec_asset_code?: string;
+    dec_serial_number?: string | null;
+    dec_status?: string;
+    dec_has_serial_number?: boolean;
+  };
+  available?: boolean;
+} | null {
   if (!call.result || typeof call.result !== "object") return null;
   const result = call.result as {
     matches?: Array<{
       device?: { de_id?: number };
-      child?: { dec_asset_code?: string };
+      child?: {
+        dec_id?: number;
+        dec_asset_code?: string;
+        dec_serial_number?: string | null;
+        dec_status?: string;
+        dec_has_serial_number?: boolean;
+      };
       available?: boolean;
     }>;
   };
@@ -650,7 +988,13 @@ function extractAssetMatch(
 }
 
 function isListAllAvailabilityQuery(query: string): boolean {
-  return /(ทั้งหมด|ลิสต์|รายการ|all|list|show|แสดง|รวม|มีอุปกรณ์ว่าง|มีของว่าง|อุปกรณ์ว่างมีอะไรบ้าง|มีอุปกรณ์ว่างอะไรบ้าง|ตรวจสอบอุปกรณ์.*ว่าง|เช็คอุปกรณ์.*ว่าง|ดูอุปกรณ์.*ว่าง|any available devices|any available equipment)/i.test(
+  return /(ทั้งหมด|ลิสต์|รายการ|all|list|show|แสดง|รวม|มีอุปกรณ์ว่าง|มีของว่าง|มีอะไรว่าง|มีอะไรว่างบ้าง|อุปกรณ์ว่างมีอะไรบ้าง|มีอุปกรณ์ว่างอะไรบ้าง|อุปกรณ์ไหนว่าง|ของว่างอะไรบ้าง|อันไหนว่าง|ไหนว่าง|ตรวจสอบอุปกรณ์.*ว่าง|เช็คอุปกรณ์.*ว่าง|ดูอุปกรณ์.*ว่าง|any available devices|any available equipment)/i.test(
+    query,
+  );
+}
+
+function isListAllDevicesQuery(query: string): boolean {
+  return /(รายการอุปกรณ์ทั้งหมด|ลิสต์อุปกรณ์ทั้งหมด|อุปกรณ์ทั้งหมด|รายการอุปกรณ์ในระบบ|อุปกรณ์ในระบบมีอะไรบ้าง|มีอุปกรณ์อะไรบ้างในระบบ|list all devices|show all devices|all devices)/i.test(
     query,
   );
 }
@@ -669,7 +1013,7 @@ function buildDeterministicListResponse(
   query: string,
   toolResults: ToolCall[],
 ): string | null {
-  if (!isListAllAvailabilityQuery(query)) return null;
+  if (!isListAllAvailabilityQuery(query) && !isListAllDevicesQuery(query)) return null;
 
   const listTool = toolResults.find(
     (tool) => tool.tool === "list_devices_with_availability",
@@ -863,12 +1207,46 @@ function buildDeterministicAssetResponse(
   const device = (match.device ?? {}) as Record<string, unknown>;
   const decStatus = (child.dec_status as string | undefined) ?? undefined;
   const derivedAvailable = deriveAvailabilityFromChild(child, match.available);
+  const dateRange = extractDateRange(query);
 
   const statusLabel = mapChildStatus(decStatus);
   const availabilityLabel = derivedAvailable ? "พร้อมใช้งาน" : "ไม่พร้อมใช้งาน";
   const availabilityYesNo = derivedAvailable ? "ใช่" : "ไม่ใช่";
   const assetLabel =
     (child.dec_asset_code as string | undefined) ?? assetCode;
+
+  if (dateRange) {
+    const dateTool = toolResults.find(
+      (tool) => tool.tool === "get_device_available_for_ticket",
+    );
+    if (dateTool?.error) {
+      return `ไม่สามารถตรวจสอบอุปกรณ์ ${assetLabel} ตามช่วงวันที่ที่ระบุได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง`;
+    }
+
+    const availableChildren = dateTool ? getArrayResult<{ dec_id?: number }>(dateTool) : [];
+    const childId = child.dec_id as number | undefined;
+    const isAvailableForRange =
+      typeof childId === "number"
+        ? availableChildren.some((candidate) => candidate.dec_id === childId)
+        : availableChildren.length > 0;
+    const dateRangeLabel = `${dateRange.startDate} ถึง ${dateRange.endDate}`;
+
+    return [
+      `ผลการตรวจสอบ ${assetLabel} สำหรับช่วง ${dateRangeLabel}:`,
+      `สถานะตามช่วงวันที่: ${isAvailableForRange ? "พร้อมใช้งาน" : "ไม่พร้อมใช้งาน"}`,
+      device.de_name || device.name
+        ? `อุปกรณ์แม่: ${device.de_name || device.name}${
+            device.de_id ? ` (ID: ${device.de_id})` : ""
+          }`
+        : null,
+      device.de_location || device.location
+        ? `ที่เก็บ: ${device.de_location || device.location}`
+        : null,
+      child.dec_serial_number ? `Serial: ${child.dec_serial_number}` : null,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+  }
 
   const lines: string[] = [];
   lines.push(`ผลการตรวจสอบ ${assetLabel}:`);
@@ -896,6 +1274,159 @@ function buildDeterministicAssetResponse(
   }
 
   return lines.join("\n");
+}
+
+function buildDeterministicAvailabilityResponse(
+  intent: string,
+  query: string,
+  toolResults: ToolCall[],
+): string | null {
+  if (intent !== "device_lookup" || !isAvailabilityQuery(query)) return null;
+
+  const dateRange = extractDateRange(query);
+  const summaryTool = toolResults.find(
+    (tool) => tool.tool === "get_device_borrow_summary",
+  );
+  const ticketTool = toolResults.find(
+    (tool) => tool.tool === "get_device_available_for_ticket",
+  );
+  const childTool = toolResults.find(
+    (tool) => tool.tool === "get_device_children_availability",
+  );
+  const listTool = toolResults.find(
+    (tool) => tool.tool === "list_devices_with_availability",
+  );
+
+  if (!summaryTool && !ticketTool && !childTool && !listTool) return null;
+
+  if (summaryTool?.error) {
+    return "ไม่สามารถดึงข้อมูลอุปกรณ์ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+  if (ticketTool?.error) {
+    return "ไม่สามารถตรวจสอบอุปกรณ์ตามช่วงวันที่ที่ระบุได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+  if (childTool?.error) {
+    return "ไม่สามารถตรวจสอบสถานะอุปกรณ์ลูกได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+  if (listTool?.error) {
+    return "ไม่สามารถดึงรายการอุปกรณ์ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง";
+  }
+
+  const lines: string[] = [];
+  const summary = extractBorrowSummary(summaryTool?.result);
+
+  if (summary) {
+    lines.push(`ผลการตรวจสอบอุปกรณ์ ${summary.name}:`);
+    if (summary.serial) lines.push(`Serial: ${summary.serial}`);
+    if (summary.location) lines.push(`ที่เก็บ: ${summary.location}`);
+    lines.push(`พร้อมใช้งาน: ${summary.ready}/${summary.total}`);
+  }
+
+  if (dateRange) {
+    lines.push(`ช่วงวันที่: ${dateRange.startDate} ถึง ${dateRange.endDate}`);
+  }
+
+  const children = extractAvailabilityChildren(
+    ticketTool?.result ?? childTool?.result,
+  );
+  if (children.length > 0) {
+    lines.push("อุปกรณ์ลูกที่ว่าง:");
+    children.forEach((child, index) => {
+      const label =
+        (child.dec_asset_code as string | undefined) ||
+        (child.dec_serial_number as string | undefined) ||
+        `item-${index + 1}`;
+      const status = (child.dec_status as string | undefined) || "N/A";
+      lines.push(
+        `${index + 1}. ${label}${child.dec_serial_number ? ` / ${child.dec_serial_number}` : ""} - ${mapChildStatus(status)} (${status})`,
+      );
+    });
+    return lines.join("\n");
+  }
+
+  const list = Array.isArray(listTool?.result)
+    ? (listTool?.result as Array<Record<string, unknown>>)
+    : [];
+
+  if (
+    dateRange &&
+    list.length > 1 &&
+    !isListAllAvailabilityQuery(query) &&
+    !isListAllDevicesQuery(query)
+  ) {
+    return "พบหลายอุปกรณ์ที่ตรงกับคำค้นนี้ กรุณาระบุชื่อรุ่นหรือรหัสอุปกรณ์ให้ชัดเจนกว่านี้ก่อน เพื่อให้ตรวจสอบตามช่วงวันที่ได้ถูกต้อง";
+  }
+
+  if (list.length > 0) {
+    lines.push(`รายการอุปกรณ์ว่าง (${list.length} รายการ):`);
+    list.forEach((device, index) => {
+      const name = (device.de_name || device.name || "Unknown") as string;
+      const id = (device.de_id || device.id || "") as number | string;
+      const available = (device.available ?? "?") as number | string;
+      const total = (device.total ?? "?") as number | string;
+      const location = (device.de_location || device.location || "N/A") as string;
+      lines.push(
+        `${index + 1}. ${name}${id ? ` (ID: ${id})` : ""} - ว่าง ${available}/${total} - ที่เก็บ: ${location}`,
+      );
+    });
+    return lines.join("\n");
+  }
+
+  if (summary) {
+    lines.push("ไม่พบอุปกรณ์ว่างในช่วงเวลาที่ระบุ");
+    return lines.join("\n");
+  }
+
+  return null;
+}
+
+function extractBorrowSummary(result: unknown): {
+  name: string;
+  serial?: string;
+  location?: string;
+  ready: number;
+  total: number;
+} | null {
+  if (!result || typeof result !== "object") return null;
+  const payload = result as Record<string, unknown>;
+  const name =
+    (payload.de_name as string | undefined) ||
+    (payload.name as string | undefined);
+  if (!name) return null;
+  return {
+    name,
+    serial:
+      (payload.de_serial_number as string | undefined) ||
+      (payload.serial as string | undefined),
+    location:
+      (payload.de_location as string | undefined) ||
+      (payload.location as string | undefined),
+    ready:
+      typeof payload.ready === "number"
+        ? payload.ready
+        : typeof payload.available === "number"
+          ? payload.available
+          : 0,
+    total: typeof payload.total === "number" ? payload.total : 0,
+  };
+}
+
+function extractAvailabilityChildren(
+  result: unknown,
+): Array<Record<string, unknown>> {
+  if (Array.isArray(result)) {
+    return result as Array<Record<string, unknown>>;
+  }
+  if (result && typeof result === "object") {
+    const payload = result as Record<string, unknown>;
+    if (Array.isArray(payload.data)) {
+      return payload.data as Array<Record<string, unknown>>;
+    }
+    if (Array.isArray(payload.children)) {
+      return payload.children as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
 }
 
 function mapChildStatus(status?: string): string {
@@ -969,6 +1500,10 @@ function extractDateRange(
   const isoMatches = Array.from(
     query.matchAll(/\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b/g),
   );
+  if (isoMatches.length === 1) {
+    const date = normalizeIsoDate(isoMatches[0][1], isoMatches[0][2], isoMatches[0][3]);
+    return { startDate: date, endDate: date };
+  }
   if (isoMatches.length >= 2) {
     const start = normalizeIsoDate(isoMatches[0][1], isoMatches[0][2], isoMatches[0][3]);
     const end = normalizeIsoDate(isoMatches[1][1], isoMatches[1][2], isoMatches[1][3]);
@@ -978,6 +1513,10 @@ function extractDateRange(
   const dmyMatches = Array.from(
     query.matchAll(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/g),
   );
+  if (dmyMatches.length === 1) {
+    const date = normalizeIsoDate(dmyMatches[0][3], dmyMatches[0][2], dmyMatches[0][1]);
+    return { startDate: date, endDate: date };
+  }
   if (dmyMatches.length >= 2) {
     const start = normalizeIsoDate(dmyMatches[0][3], dmyMatches[0][2], dmyMatches[0][1]);
     const end = normalizeIsoDate(dmyMatches[1][3], dmyMatches[1][2], dmyMatches[1][1]);
@@ -1131,18 +1670,152 @@ async function safeExecuteTool(
   tool: string,
   params: Record<string, unknown>,
   cookie?: string,
+  requestId?: string,
 ): Promise<ToolCall> {
+  const startedAt = Date.now();
   try {
     const result = await executeTool(tool, params, cookie);
+    const durationMs = Date.now() - startedAt;
+    recordToolTelemetry(tool, "success", durationMs, requestId);
     return { tool, params, result };
   } catch (error) {
-    console.error("[AI Orchestrator] Tool execution failed:", error);
+    const durationMs = Date.now() - startedAt;
+    recordToolTelemetry(tool, "error", durationMs, requestId);
+    console.error("[AI Orchestrator] Tool execution failed:", {
+      tool,
+      requestId,
+      durationMs,
+      error: error instanceof Error ? error.message : error,
+    });
     return {
       tool,
       params,
       error: error instanceof Error ? error.message : "Tool execution failed",
     };
   }
+}
+
+function recordToolTelemetry(
+  tool: string,
+  status: "success" | "error",
+  durationMs: number,
+  requestId?: string,
+): void {
+  const labels = { tool, status };
+  metrics.counter("tool_requests_total", labels);
+  metrics.histogram("tool_request_duration_ms", durationMs, labels);
+  logger.info("[AI Orchestrator] tool telemetry", {
+    requestId,
+    tool,
+    status,
+    durationMs,
+  });
+}
+
+function createEmptyTimings(): PipelineTimings {
+  return {
+    safetyMs: 0,
+    intentMs: 0,
+    ragMs: 0,
+    toolMs: 0,
+    responseMs: 0,
+    totalMs: 0,
+  };
+}
+
+function finalizeOrchestratorResult(params: {
+  requestId: string;
+  query: string;
+  intent: string;
+  response: string;
+  responsePath: ResponsePath;
+  timings: PipelineTimings;
+  sources: { rag?: RAGContext[]; tools?: ToolCall[] };
+  safetyResult?: SafetyCheckResult;
+  ragTelemetry?: RAGRetrievalTelemetry;
+}): OrchestratorResult {
+  const totalMs = params.timings.totalMs > 0 ? params.timings.totalMs : 0;
+  params.timings.totalMs = totalMs;
+  const status = params.responsePath === "blocked" ? "blocked" : "success";
+  const labels = {
+    intent: params.intent,
+    path: params.responsePath,
+    status,
+  };
+
+  metrics.counter(METRIC_NAMES.AI_REQUESTS_TOTAL, labels);
+  metrics.histogram(METRIC_NAMES.AI_REQUEST_DURATION, totalMs, labels);
+  metrics.counter("chat_response_path_total", {
+    intent: params.intent,
+    path: params.responsePath,
+  });
+  metrics.histogram("chat_stage_duration_ms", params.timings.safetyMs, {
+    stage: "safety",
+    intent: params.intent,
+    path: params.responsePath,
+  });
+  metrics.histogram("chat_stage_duration_ms", params.timings.intentMs, {
+    stage: "intent",
+    intent: params.intent,
+    path: params.responsePath,
+  });
+  metrics.histogram("chat_stage_duration_ms", params.timings.ragMs, {
+    stage: "rag",
+    intent: params.intent,
+    path: params.responsePath,
+  });
+  metrics.histogram("chat_stage_duration_ms", params.timings.toolMs, {
+    stage: "tools",
+    intent: params.intent,
+    path: params.responsePath,
+  });
+  metrics.histogram("chat_stage_duration_ms", params.timings.responseMs, {
+    stage: "response",
+    intent: params.intent,
+    path: params.responsePath,
+  });
+
+  if (params.responsePath !== "blocked") {
+    logAIResponse(params.query, params.intent, params.response.length, {
+      requestId: params.requestId,
+      latencyMs: totalMs,
+    });
+  }
+
+  logger.info("[AI Orchestrator] pipeline complete", {
+    requestId: params.requestId,
+    intent: params.intent,
+    responsePath: params.responsePath,
+    totalMs,
+    timings: params.timings,
+    ragCount: params.sources.rag?.length ?? 0,
+    toolCount: params.sources.tools?.length ?? 0,
+    topSimilarity: params.ragTelemetry?.topSimilarity,
+    averageSimilarity: params.ragTelemetry?.averageSimilarity,
+    zeroHit: params.ragTelemetry?.zeroHit,
+  });
+
+  return {
+    response: params.response,
+    intent: params.intent,
+    requestId: params.requestId,
+    responsePath: params.responsePath,
+    timings: params.timings,
+    sources: params.sources,
+    safetyResult: params.safetyResult,
+    telemetry: params.ragTelemetry
+      ? {
+          rag: params.ragTelemetry,
+          toolCount: params.sources.tools?.length ?? 0,
+          toolErrors:
+            params.sources.tools?.filter((tool) => Boolean(tool.error)).length ?? 0,
+        }
+      : {
+          toolCount: params.sources.tools?.length ?? 0,
+          toolErrors:
+            params.sources.tools?.filter((tool) => Boolean(tool.error)).length ?? 0,
+        },
+  };
 }
 
 /**

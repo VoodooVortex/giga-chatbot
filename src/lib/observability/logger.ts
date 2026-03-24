@@ -5,6 +5,10 @@
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
+const MAX_LOG_STRING_LENGTH = 1000;
+const MAX_LOG_ARRAY_LENGTH = 20;
+const MAX_LOG_OBJECT_KEYS = 20;
+
 interface LogContext {
     requestId?: string;
     userId?: string;
@@ -25,6 +29,90 @@ interface LogEntry {
     latency?: number;
 }
 
+function truncate(value: string, maxLength: number = MAX_LOG_STRING_LENGTH): string {
+    if (value.length <= maxLength) return value;
+    return `${value.slice(0, maxLength)}…`;
+}
+
+function normalizeLogValue(
+    value: unknown,
+    depth = 0,
+    seen = new WeakSet<object>(),
+): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") return truncate(value);
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "symbol") return value.toString();
+    if (typeof value === "function") return "[Function]";
+    if (value instanceof Date) return value.toISOString();
+    if (value instanceof Error) {
+        return {
+            name: value.name,
+            message: truncate(value.message),
+            stack: value.stack ? truncate(value.stack, 4000) : undefined,
+        };
+    }
+
+    if (depth >= 4) {
+        return "[DepthLimit]";
+    }
+
+    if (Array.isArray(value)) {
+        return value.slice(0, MAX_LOG_ARRAY_LENGTH).map((item) =>
+            normalizeLogValue(item, depth + 1, seen)
+        );
+    }
+
+    if (typeof value === "object") {
+        const objectValue = value as Record<string, unknown>;
+        if (seen.has(objectValue)) {
+            return "[Circular]";
+        }
+
+        seen.add(objectValue);
+        const entries = Object.entries(objectValue)
+            .filter(([, entryValue]) => entryValue !== undefined)
+            .slice(0, MAX_LOG_OBJECT_KEYS)
+            .map(([key, entryValue]) => [key, normalizeLogValue(entryValue, depth + 1, seen)]);
+        seen.delete(objectValue);
+        return Object.fromEntries(entries);
+    }
+
+    return truncate(String(value));
+}
+
+function safeJsonStringify(value: unknown): string {
+    try {
+        return JSON.stringify(normalizeLogValue(value));
+    } catch {
+        return JSON.stringify({
+            message: "Unable to serialize log entry",
+        });
+    }
+}
+
+function formatContextValue(value: unknown): string {
+    const normalized = normalizeLogValue(value);
+    if (normalized === null || normalized === undefined) {
+        return "";
+    }
+
+    if (typeof normalized === "string") {
+        return normalized;
+    }
+
+    if (
+        typeof normalized === "number" ||
+        typeof normalized === "boolean" ||
+        typeof normalized === "bigint"
+    ) {
+        return String(normalized);
+    }
+
+    return truncate(safeJsonStringify(normalized), 240);
+}
+
 class Logger {
     private logLevel: LogLevel;
 
@@ -39,18 +127,18 @@ class Logger {
 
     private formatLog(entry: LogEntry): string {
         if (process.env.LOG_FORMAT === "json") {
-            return JSON.stringify(entry);
+            return safeJsonStringify(entry);
         }
 
         // Human readable format
         const contextStr = entry.context
             ? Object.entries(entry.context)
                 .filter(([, v]) => v !== undefined)
-                .map(([k, v]) => `${k}=${v}`)
+                .map(([k, v]) => `${k}=${formatContextValue(v)}`)
                 .join(" ")
             : "";
 
-        const latencyStr = entry.latency ? ` (${entry.latency}ms)` : "";
+        const latencyStr = typeof entry.latency === "number" ? ` (${entry.latency}ms)` : "";
 
         return `[${entry.timestamp}] ${entry.level.toUpperCase()}: ${entry.message}${contextStr ? " | " + contextStr : ""}${latencyStr}`;
     }

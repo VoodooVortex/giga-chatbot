@@ -184,6 +184,9 @@ export interface NotificationListProps {
   onClose: () => void;
   onLoadMore?: () => void;
   hasMore?: boolean;
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
 /**
@@ -197,6 +200,9 @@ export const NotificationList: React.FC<NotificationListProps> = ({
   onClose,
   onLoadMore,
   hasMore,
+  loading = false,
+  error = null,
+  onRetry,
 }) => {
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, clientHeight, scrollHeight } = e.currentTarget;
@@ -224,17 +230,56 @@ export const NotificationList: React.FC<NotificationListProps> = ({
         onScroll={handleScroll}
         className="overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent"
       >
-        {notifications.length > 0 ? (
+        {loading && notifications.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-3">
+            <div className="w-10 h-10 rounded-full border-4 border-gray-200 border-t-[#40A9FF] animate-spin" />
+            <p>กำลังโหลดการแจ้งเตือน...</p>
+          </div>
+        ) : error && notifications.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-3 px-6 text-center">
+            <Icon icon="mdi:alert-circle-outline" className="w-12 h-12 opacity-60" />
+            <p className="font-medium text-gray-700">โหลดการแจ้งเตือนไม่สำเร็จ</p>
+            <p className="text-sm text-gray-500 break-words">{error}</p>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="mt-1 rounded-full bg-[#40A9FF] px-4 py-2 text-sm font-medium text-white hover:bg-[#2d93e6] transition-colors"
+              >
+                ลองใหม่
+              </button>
+            )}
+          </div>
+        ) : notifications.length > 0 ? (
           <>
             {notifications.map((notif, index) => (
               <NotificationItem key={notif.id || index} {...notif} />
             ))}
-            {hasMore && (
+            {loading && (
               <div className="p-4 text-center text-gray-500 text-sm">
-                LOADING...
+                กำลังโหลด...
               </div>
             )}
-            {!hasMore && notifications.length > 0 && (
+            {!loading && hasMore && (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                เลื่อนลงเพื่อโหลดเพิ่ม
+              </div>
+            )}
+            {error && (
+              <div className="p-4 text-center text-sm text-rose-500 flex flex-col gap-2">
+                <span>{error}</span>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="self-center rounded-full border border-rose-200 px-3 py-1 text-rose-600 hover:bg-rose-50 transition-colors"
+                  >
+                    ลองใหม่
+                  </button>
+                )}
+              </div>
+            )}
+            {!hasMore && !loading && notifications.length > 0 && (
               <div className="p-4 text-center text-gray-400 text-xs"></div>
             )}
           </>

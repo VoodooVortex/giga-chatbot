@@ -132,6 +132,13 @@ export interface Device {
     section?: Section;
 }
 
+export interface DeviceWithChilds extends Device {
+    device_childs: DeviceChild[];
+    total_quantity?: number;
+    accessories?: BorrowDeviceAccessory[];
+    approval_flow?: unknown;
+}
+
 export interface DeviceChild {
     dec_id: number;
     dec_serial_number: string | null;
@@ -201,6 +208,15 @@ export async function getDevice(
     cookie?: string
 ): Promise<Device> {
     return makeRequest<Device>(`/api/v1/inventory/devices/${id}`, { cookie });
+}
+
+export async function getDeviceWithChilds(
+    id: number,
+    cookie?: string
+): Promise<DeviceWithChilds | null> {
+    return makeRequest<DeviceWithChilds | null>(`/api/v1/inventory/devices/${id}`, {
+        cookie,
+    });
 }
 
 export async function getDeviceChildStatus(

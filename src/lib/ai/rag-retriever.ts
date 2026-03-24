@@ -7,10 +7,19 @@ import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "@/lib/config";
+import { logger } from "@/lib/observability/logger";
+import { logRAGRetrieval } from "@/lib/observability/audit";
+import { metrics } from "@/lib/observability/metrics";
 import type { RAGContext } from "./types";
 
 const genAI = new GoogleGenerativeAI(env.GOOGLE_API_KEY_EMBEDDING);
 const queryEmbeddingCache = new Map<string, { embedding: number[]; expiresAt: number }>();
+const RAG_REQUEST_METRIC = "rag_requests_total";
+const RAG_DURATION_METRIC = "rag_request_duration_ms";
+const RAG_EMBEDDING_DURATION_METRIC = "rag_embedding_duration_ms";
+const RAG_DB_DURATION_METRIC = "rag_db_duration_ms";
+const RAG_SIMILARITY_METRIC = "rag_similarity_score";
+const RAG_CONTEXTS_METRIC = "rag_contexts_returned_total";
 
 interface EmbeddingResult {
     re_id: number;
@@ -18,6 +27,25 @@ interface EmbeddingResult {
     re_source_pk: string;
     re_content: string;
     similarity: number;
+}
+
+export interface RAGRetrievalTelemetry {
+    strategy: "vector" | "hybrid";
+    durationMs: number;
+    embeddingMs: number;
+    dbMs: number;
+    contextCount: number;
+    vectorCount: number;
+    keywordCount: number;
+    zeroHit: boolean;
+    topSimilarity: number | null;
+    averageSimilarity: number | null;
+    minSimilarity: number;
+}
+
+export interface RAGRetrievalResult {
+    contexts: RAGContext[];
+    telemetry: RAGRetrievalTelemetry;
 }
 
 /**
@@ -97,14 +125,66 @@ export async function retrieveRAGContext(
         topK?: number;
         minSimilarity?: number;
         sourceFilter?: string[];
+        requestId?: string;
     } = {}
 ): Promise<RAGContext[]> {
+    return (await retrieveRAGContextWithTelemetry(query, options)).contexts;
+}
+
+export async function retrieveRAGContextWithTelemetry(
+    query: string,
+    options: {
+        topK?: number;
+        minSimilarity?: number;
+        sourceFilter?: string[];
+        requestId?: string;
+    } = {}
+): Promise<RAGRetrievalResult> {
+    const { topK = 5, minSimilarity = 0.7, sourceFilter, requestId } = options;
+    const requestStartedAt = Date.now();
+    const vectorResult = await runVectorSearch(query, {
+        topK,
+        minSimilarity,
+        sourceFilter,
+    });
+
+    const telemetry = buildTelemetry("vector", vectorResult.contexts, {
+        durationMs: Date.now() - requestStartedAt,
+        embeddingMs: vectorResult.embeddingMs,
+        dbMs: vectorResult.dbMs,
+        minSimilarity,
+        vectorCount: vectorResult.contexts.length,
+        keywordCount: 0,
+    });
+
+    recordRAGTelemetry(query, vectorResult.contexts, telemetry, requestId);
+
+    return {
+        contexts: vectorResult.contexts,
+        telemetry,
+    };
+}
+
+async function runVectorSearch(
+    query: string,
+    options: {
+        topK?: number;
+        minSimilarity?: number;
+        sourceFilter?: string[];
+    } = {}
+): Promise<{
+    contexts: RAGContext[];
+    embeddingMs: number;
+    dbMs: number;
+}> {
     const { topK = 5, minSimilarity = 0.7, sourceFilter } = options;
 
-    // Generate query embedding
+    const embeddingStartedAt = Date.now();
     const queryEmbedding = await generateQueryEmbedding(query);
+    const embeddingMs = Date.now() - embeddingStartedAt;
     const embeddingString = `[${queryEmbedding.join(",")}]`;
 
+    const dbStartedAt = Date.now();
     // Build the SQL query with vector similarity search
     let query_sql = sql`
     SELECT
@@ -126,12 +206,17 @@ export async function retrieveRAGContext(
     query_sql = sql`${query_sql} ORDER BY similarity DESC LIMIT ${topK}`;
 
     const result = await db.execute(query_sql) as unknown as { rows: EmbeddingResult[] };
+    const dbMs = Date.now() - dbStartedAt;
 
-    return result.rows.map(r => ({
+    return {
+        contexts: result.rows.map((r) => ({
         content: r.re_content,
         source: `${r.re_source_table}:${r.re_source_pk}`,
         similarity: r.similarity,
-    }));
+        })),
+        embeddingMs,
+        dbMs,
+    };
 }
 
 /**
@@ -143,70 +228,204 @@ export async function retrieveHybridContext(
     options: {
         topK?: number;
         minSimilarity?: number;
+        requestId?: string;
     } = {}
 ): Promise<RAGContext[]> {
-    const { topK = 5, minSimilarity = 0.6 } = options;
+    return (await retrieveHybridContextWithTelemetry(query, options)).contexts;
+}
 
-    // Get vector search results
-    const vectorResults = await retrieveRAGContext(query, { topK: topK * 2, minSimilarity });
+export async function retrieveHybridContextWithTelemetry(
+    query: string,
+    options: {
+        topK?: number;
+        minSimilarity?: number;
+        requestId?: string;
+    } = {}
+): Promise<RAGRetrievalResult> {
+    const { topK = 5, minSimilarity = 0.6, requestId } = options;
+    const requestStartedAt = Date.now();
 
-    // Extract keywords for text search
+    const vectorResult = await runVectorSearch(query, { topK: topK * 2, minSimilarity });
     const keywords = extractKeywords(query);
+    const keywordSearchStartedAt = Date.now();
 
-    if (keywords.length === 0) {
-        return vectorResults.slice(0, topK);
+    let keywordResults: Array<{
+        re_id: number;
+        re_source_table: string;
+        re_source_pk: string;
+        re_content: string;
+        rank: number;
+    }> = [];
+
+    if (keywords.length > 0) {
+        const keywordPattern = keywords.join(" | ");
+        const keywordResult = await db.execute(sql`
+        SELECT
+          re_id,
+          re_source_table,
+          re_source_pk,
+          re_content,
+          ts_rank(to_tsvector('english', re_content), to_tsquery(${keywordPattern})) as rank
+        FROM rag.embeddings
+        WHERE to_tsvector('english', re_content) @@ to_tsquery(${keywordPattern})
+        ORDER BY rank DESC
+        LIMIT ${topK}
+      `) as unknown as {
+            rows: Array<{
+                re_id: number;
+                re_source_table: string;
+                re_source_pk: string;
+                re_content: string;
+                rank: number;
+            }>
+        };
+        keywordResults = keywordResult.rows;
     }
+    const keywordDbMs = Date.now() - keywordSearchStartedAt;
 
-    // Build keyword search query
-    const keywordPattern = keywords.join(" | ");
-    const keywordResult = await db.execute(sql`
-    SELECT
-      re_id,
-      re_source_table,
-      re_source_pk,
-      re_content,
-      ts_rank(to_tsvector('english', re_content), to_tsquery(${keywordPattern})) as rank
-    FROM rag.embeddings
-    WHERE to_tsvector('english', re_content) @@ to_tsquery(${keywordPattern})
-    ORDER BY rank DESC
-    LIMIT ${topK}
-  `) as unknown as {
-        rows: Array<{
-            re_id: number;
-            re_source_table: string;
-            re_source_pk: string;
-            re_content: string;
-            rank: number;
-        }>
+    const combined = combineRetrievalResults(vectorResult.contexts, keywordResults, topK);
+    const telemetry = buildTelemetry("hybrid", combined, {
+        durationMs: Date.now() - requestStartedAt,
+        embeddingMs: vectorResult.embeddingMs,
+        dbMs: vectorResult.dbMs + keywordDbMs,
+        minSimilarity,
+        vectorCount: vectorResult.contexts.length,
+        keywordCount: keywordResults.length,
+    });
+
+    recordRAGTelemetry(query, combined, telemetry, requestId, {
+        vectorCount: vectorResult.contexts.length,
+        keywordCount: keywordResults.length,
+    });
+
+    return {
+        contexts: combined,
+        telemetry,
     };
-    const keywordResults = keywordResult.rows;
+}
 
-    // Combine and deduplicate results
-    const seen = new Set<number>();
+function combineRetrievalResults(
+    vectorResults: RAGContext[],
+    keywordResults: Array<{
+        re_id: number;
+        re_source_table: string;
+        re_source_pk: string;
+        re_content: string;
+        rank: number;
+    }>,
+    topK: number
+): RAGContext[] {
+    const seen = new Set<string>();
     const combined: RAGContext[] = [];
 
-    // Add vector results first (higher priority)
-    for (const r of vectorResults) {
-        const id = parseInt(r.source.split(":")[1] || "0");
-        if (!seen.has(id)) {
-            seen.add(id);
-            combined.push(r);
+    for (const result of vectorResults) {
+        const sourceKey = normalizeSourceKey(result.source);
+        if (!seen.has(sourceKey)) {
+            seen.add(sourceKey);
+            combined.push(result);
         }
     }
 
-    // Add keyword results
-    for (const r of keywordResults) {
-        if (!seen.has(r.re_id)) {
-            seen.add(r.re_id);
+    for (const result of keywordResults) {
+        const sourceKey = `${result.re_source_table}:${result.re_source_pk}`;
+        if (!seen.has(sourceKey)) {
+            seen.add(sourceKey);
             combined.push({
-                content: r.re_content,
-                source: `${r.re_source_table}:${r.re_source_pk}`,
-                similarity: r.rank, // Use rank as similarity score
+                content: result.re_content,
+                source: sourceKey,
+                similarity: result.rank,
             });
         }
     }
 
     return combined.slice(0, topK);
+}
+
+function buildTelemetry(
+    strategy: "vector" | "hybrid",
+    contexts: RAGContext[],
+    timing: {
+        durationMs: number;
+        embeddingMs: number;
+        dbMs: number;
+        minSimilarity: number;
+        vectorCount: number;
+        keywordCount: number;
+    }
+): RAGRetrievalTelemetry {
+    const similarities = contexts.map((context) => context.similarity).filter((value) =>
+        Number.isFinite(value)
+    );
+    const topSimilarity = similarities.length > 0 ? similarities[0] ?? null : null;
+    const averageSimilarity =
+        similarities.length > 0
+            ? similarities.reduce((sum, value) => sum + value, 0) / similarities.length
+            : null;
+
+    return {
+        strategy,
+        durationMs: timing.durationMs,
+        embeddingMs: timing.embeddingMs,
+        dbMs: timing.dbMs,
+        contextCount: contexts.length,
+        vectorCount: timing.vectorCount,
+        keywordCount: timing.keywordCount,
+        zeroHit: contexts.length === 0,
+        topSimilarity,
+        averageSimilarity,
+        minSimilarity: timing.minSimilarity,
+    };
+}
+
+function recordRAGTelemetry(
+    query: string,
+    contexts: RAGContext[],
+    telemetry: RAGRetrievalTelemetry,
+    requestId?: string,
+    counts?: { vectorCount?: number; keywordCount?: number }
+): void {
+    const labels = {
+        strategy: telemetry.strategy,
+        hit: telemetry.zeroHit ? "miss" : "hit",
+    };
+
+    metrics.counter(RAG_REQUEST_METRIC, labels);
+    metrics.histogram(RAG_DURATION_METRIC, telemetry.durationMs, labels);
+    metrics.histogram(RAG_EMBEDDING_DURATION_METRIC, telemetry.embeddingMs, labels);
+    metrics.histogram(RAG_DB_DURATION_METRIC, telemetry.dbMs, labels);
+    metrics.histogram(RAG_SIMILARITY_METRIC, telemetry.topSimilarity ?? 0, {
+        ...labels,
+        kind: "top1",
+    });
+    metrics.histogram(RAG_SIMILARITY_METRIC, telemetry.averageSimilarity ?? 0, {
+        ...labels,
+        kind: "avg",
+    });
+    metrics.counter(RAG_CONTEXTS_METRIC, labels, contexts.length);
+
+    const contextSources = contexts.map((context) => context.source);
+    const traceId = requestId || crypto.randomUUID();
+    logRAGRetrieval(query, contexts.length, contextSources, traceId);
+
+    logger.info("[RAG] retrieval complete", {
+        requestId: traceId,
+        strategy: telemetry.strategy,
+        zeroHit: telemetry.zeroHit,
+        contextCount: telemetry.contextCount,
+        topSimilarity: telemetry.topSimilarity,
+        averageSimilarity: telemetry.averageSimilarity,
+        vectorCount: counts?.vectorCount ?? telemetry.vectorCount,
+        keywordCount: counts?.keywordCount ?? telemetry.keywordCount,
+        durationMs: telemetry.durationMs,
+    });
+}
+
+function normalizeSourceKey(source: string): string {
+    const trimmed = source.trim();
+    if (!trimmed) return "unknown:unknown";
+    const parts = trimmed.split(":");
+    if (parts.length < 2) return trimmed;
+    return `${parts[0]}:${parts.slice(1).join(":")}`;
 }
 
 function extractKeywords(query: string): string[] {

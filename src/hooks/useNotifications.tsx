@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { NotificationItemProps } from "@/components/Notification";
 import { getAuthHeader } from "@/lib/auth/client";
 
@@ -10,8 +10,11 @@ interface NotificationDto {
   n_message: string;
   n_target_route?: string | null;
   created_at: string;
+  send_at?: string | null;
   status?: "UNREAD" | "READ" | "DISMISSED";
+  nr_status?: "UNREAD" | "READ" | "DISMISSED";
   event?: string | null;
+  n_base_event?: string | null;
   nr_id?: number;
 }
 
@@ -71,70 +74,149 @@ const formatTimestamp = (value: string) => {
   });
 };
 
+const resolveNotificationRoute = (
+  route: string | null | undefined,
+  basePath: string,
+): string | undefined => {
+  if (!route) return undefined;
+  const trimmed = route.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed === basePath || trimmed.startsWith(`${basePath}/`)) return trimmed;
+  if (trimmed.startsWith("/r/")) return `${basePath}${trimmed}`;
+  if (/^r\/\d+/i.test(trimmed)) return `${basePath}/${trimmed}`;
+  if (trimmed.startsWith("/")) return trimmed;
+  if (/^chat(?:\/|$)/i.test(trimmed)) return `/${trimmed}`;
+  return `/${trimmed}`;
+};
+
+function getNotificationKey(notification: NotificationItemProps): string {
+  if (typeof notification.id === "number") {
+    return `id:${notification.id}`;
+  }
+
+  return `fallback:${notification.title}|${notification.timestamp}|${String(
+    notification.description,
+  )}`;
+}
+
+function dedupeNotifications(
+  notifications: NotificationItemProps[],
+): NotificationItemProps[] {
+  const seen = new Set<string>();
+  const deduped: NotificationItemProps[] = [];
+
+  for (const notification of notifications) {
+    const key = getNotificationKey(notification);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(notification);
+  }
+
+  return deduped;
+}
+
 export const useNotifications = (
-  _options?: { onOpenNotifications?: () => void },
+  options?: { isOpen?: boolean },
 ) => {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
+  const apiBase = `${basePath}/api/notifications`;
   const [notifications, setNotifications] = useState<NotificationItemProps[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const inFlightRequests = useRef(0);
 
   const hasMore = useMemo(() => notifications.length < total, [notifications.length, total]);
 
+  const beginLoading = useCallback(() => {
+    inFlightRequests.current += 1;
+    setLoading(true);
+  }, [inFlightRequests]);
+
+  const endLoading = useCallback(() => {
+    inFlightRequests.current = Math.max(0, inFlightRequests.current - 1);
+    if (inFlightRequests.current === 0) {
+      setLoading(false);
+    }
+  }, [inFlightRequests]);
+
   const fetchUnreadCount = useCallback(async () => {
     try {
-      const resp = await fetch("/api/v1/notifications/unread-count", {
+      const resp = await fetch(`${apiBase}/unread-count`, {
         credentials: "include",
         headers: getAuthHeader(),
+        cache: "no-store",
       });
       if (!resp.ok) return;
-      const payload = (await resp.json()) as { data?: number };
-      if (typeof payload.data === "number") {
-        setUnreadCount(payload.data);
+      const payload = (await resp.json()) as {
+        data?: number | { count?: number; unreadCount?: number };
+        count?: number;
+        unreadCount?: number;
+      };
+      const count =
+        typeof payload.data === "number"
+          ? payload.data
+          : typeof payload.data === "object" && payload.data
+            ? payload.data.count ?? payload.data.unreadCount
+            : payload.count ?? payload.unreadCount;
+      if (typeof count === "number") {
+        setUnreadCount(count);
       }
     } catch {
       // ignore
     }
-  }, []);
+  }, [apiBase]);
 
   const fetchPage = useCallback(
     async (pageNum: number, append: boolean) => {
+      beginLoading();
       try {
-        setLoading(true);
+        setError(null);
         const resp = await fetch(
-          `/api/v1/notifications?page=${pageNum}&limit=${PAGE_SIZE}`,
+          `${apiBase}?page=${pageNum}&limit=${PAGE_SIZE}`,
           {
             credentials: "include",
             headers: getAuthHeader(),
+            cache: "no-store",
           },
         );
         if (!resp.ok) throw new Error(`Failed to load notifications: ${resp.status}`);
         const payload = (await resp.json()) as PaginatedResult<NotificationDto>;
         const items = Array.isArray(payload.data) ? payload.data : [];
-        const mapped = items.map((dto) => ({
+        const mapped = dedupeNotifications(items.map((dto) => ({
           id: dto.nr_id ?? dto.n_id,
-          type: mapEventType(dto.event),
+          type: mapEventType(dto.event ?? dto.n_base_event),
           title: dto.n_title,
           description: dto.n_message,
-          timestamp: formatTimestamp(dto.created_at),
-          isRead: dto.status === "READ",
-          onClick: dto.n_target_route
-            ? () => window.location.assign(dto.n_target_route as string)
-            : undefined,
-        }));
+          timestamp: formatTimestamp(dto.send_at ?? dto.created_at),
+          isRead: (dto.nr_status ?? dto.status) === "READ",
+          onClick: (() => {
+            const targetRoute = resolveNotificationRoute(dto.n_target_route, basePath);
+            return targetRoute ? () => window.location.assign(targetRoute) : undefined;
+          })(),
+        })));
 
         setTotal(typeof payload.total === "number" ? payload.total : items.length);
         setPage(pageNum);
-        setNotifications((prev) => (append ? [...prev, ...mapped] : mapped));
+        setError(null);
+        setNotifications((prev) =>
+          append ? dedupeNotifications([...prev, ...mapped]) : mapped,
+        );
       } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to load notifications";
         console.error("[Notifications] Failed to fetch:", error);
-        if (!append) setNotifications([]);
+        setError(message);
       } finally {
-        setLoading(false);
+        endLoading();
       }
     },
-    [],
+    [apiBase, basePath, beginLoading, endLoading],
   );
 
   const loadMore = useCallback(() => {
@@ -148,27 +230,35 @@ export const useNotifications = (
 
   const markAllRead = useCallback(async () => {
     try {
-      await fetch("/api/v1/notifications/read-all", {
+      await fetch(`${apiBase}/read-all`, {
         method: "PATCH",
         credentials: "include",
         headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        cache: "no-store",
       });
       await fetchUnreadCount();
       void fetchPage(1, false);
     } catch (error) {
       console.error("[Notifications] Failed to mark all read:", error);
     }
-  }, [fetchPage, fetchUnreadCount]);
+  }, [apiBase, fetchPage, fetchUnreadCount]);
 
   useEffect(() => {
     void fetchPage(1, false);
     void fetchUnreadCount();
   }, [fetchPage, fetchUnreadCount]);
 
+  useEffect(() => {
+    if (!options?.isOpen) return;
+    void fetchPage(1, false);
+    void fetchUnreadCount();
+  }, [fetchPage, fetchUnreadCount, options?.isOpen]);
+
   return {
     notifications,
     unreadCount,
     loading,
+    error,
     hasMore,
     loadMore,
     refetch,

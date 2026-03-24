@@ -256,10 +256,8 @@ const Navbar = ({ children }: NavbarProps) => {
     return data ? JSON.parse(data) : null;
   });
 
-  const handleOpenNotifications = useCallback(() => setActive("bell"), []);
-
-  const { notifications, unreadCount, loadMore, hasMore } = useNotifications({
-    onOpenNotifications: handleOpenNotifications,
+  const { notifications, unreadCount, loadMore, hasMore, loading, error, refetch } = useNotifications({
+    isOpen: active === "bell",
   });
 
   const basePath = getBasePath(User?.us_role) || "";
@@ -428,6 +426,9 @@ const Navbar = ({ children }: NavbarProps) => {
                   onClose={() => setActive(null)}
                   onLoadMore={loadMore}
                   hasMore={hasMore}
+                  loading={loading}
+                  error={error}
+                  onRetry={refetch}
                 />
               </div>
             )}

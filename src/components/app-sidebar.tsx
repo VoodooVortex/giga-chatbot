@@ -25,11 +25,47 @@ interface ChatRoomItem {
   updated_at: string | null;
 }
 
+function upsertCurrentRoom(
+  rooms: ChatRoomItem[],
+  currentRoomId: number | null,
+): ChatRoomItem[] {
+  if (currentRoomId === null) return rooms;
+
+  const now = new Date().toISOString();
+  const existingIndex = rooms.findIndex((room) => room.cr_id === currentRoomId);
+  if (existingIndex >= 0) {
+    return rooms;
+  }
+
+  return [
+    {
+      cr_id: currentRoomId,
+      cr_title: null,
+      preview_title: "แชทใหม่",
+      created_at: now,
+      updated_at: now,
+    },
+    ...rooms,
+  ];
+}
+
 export function AppSidebar() {
   const router = useRouter();
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
   const [rooms, setRooms] = React.useState<ChatRoomItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  const pathname = usePathname();
+
+  const currentRoomId = React.useMemo(() => {
+    const segments = pathname.split("/").filter(Boolean);
+    const roomIndex = segments.indexOf("r");
+    if (roomIndex === -1) return null;
+
+    const candidate = segments[roomIndex + 1];
+    if (!candidate || !/^\d+$/.test(candidate)) return null;
+
+    return Number(candidate);
+  }, [pathname]);
 
   // Full fetch with loading spinner — used only on initial mount.
   const fetchRooms = React.useCallback(async () => {
@@ -41,14 +77,14 @@ export function AppSidebar() {
       });
       if (!response.ok) throw new Error(`Failed to load rooms: ${response.status}`);
       const payload = (await response.json()) as { data?: ChatRoomItem[] };
-      setRooms(payload.data ?? []);
+      setRooms(upsertCurrentRoom(payload.data ?? [], currentRoomId));
     } catch (error) {
       console.error("[AppSidebar] Failed to fetch chat rooms:", error);
-      setRooms([]);
+      setRooms((prev) => upsertCurrentRoom(prev, currentRoomId));
     } finally {
       setIsLoading(false);
     }
-  }, [basePath]);
+  }, [basePath, currentRoomId]);
 
   // Silent background refresh — no loading spinner, no flicker.
   const silentRefresh = React.useCallback(async () => {
@@ -59,18 +95,11 @@ export function AppSidebar() {
       });
       if (!response.ok) return;
       const payload = (await response.json()) as { data?: ChatRoomItem[] };
-      setRooms(payload.data ?? []);
+      setRooms(upsertCurrentRoom(payload.data ?? [], currentRoomId));
     } catch {
       // best-effort
     }
-  }, [basePath]);
-
-  const pathname = usePathname();
-
-  const currentRoomId = React.useMemo(() => {
-    const match = pathname.match(/^\/r\/(\d+)/);
-    return match ? Number(match[1]) : null;
-  }, [pathname]);
+  }, [basePath, currentRoomId]);
 
   // Allow "แชทใหม่" when the user is inside any room route.
   const isInRoom = currentRoomId !== null;
@@ -79,20 +108,7 @@ export function AppSidebar() {
   // before the first message is saved (API hides empty rooms).
   React.useEffect(() => {
     if (currentRoomId === null) return;
-    setRooms((prev) => {
-      if (prev.some((r) => r.cr_id === currentRoomId)) return prev;
-      const now = new Date().toISOString();
-      return [
-        {
-          cr_id: currentRoomId,
-          cr_title: null,
-          preview_title: "แชทใหม่",
-          created_at: now,
-          updated_at: now,
-        },
-        ...prev,
-      ];
-    });
+    setRooms((prev) => upsertCurrentRoom(prev, currentRoomId));
   }, [currentRoomId]);
 
   // Initial load with spinner.
@@ -158,6 +174,7 @@ export function AppSidebar() {
       const newRoomId = payload.data?.cr_id;
 
       if (newRoomId) {
+        setRooms((prev) => upsertCurrentRoom(prev, newRoomId));
         router.push(`/r/${newRoomId}`);
         router.refresh();
       }

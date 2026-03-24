@@ -8,17 +8,41 @@ import { getApiSession } from "@/lib/auth/session";
 import { db } from "@/lib/db";
 import { chatRooms, chatMessages } from "@/lib/db/schema";
 import { desc, eq, and, sql } from "drizzle-orm";
+import { logger } from "@/lib/observability/logger";
+import { metrics, METRIC_NAMES } from "@/lib/observability/metrics";
 
 // GET /api/chat/rooms - List user's chat rooms
 export const dynamic = "force-dynamic";
 
+function getRequestId(req: NextRequest): string {
+    return req.headers.get("x-request-id")?.trim() || crypto.randomUUID();
+}
+
+function recordRequestMetric(
+    method: string,
+    route: string,
+    status: number,
+    latencyMs: number
+): void {
+    const labels = { method, route, status: String(status) };
+    metrics.counter(METRIC_NAMES.API_REQUESTS_TOTAL, labels);
+    metrics.histogram(METRIC_NAMES.API_REQUEST_DURATION, latencyMs, labels);
+}
+
 export async function GET(req: NextRequest) {
+    const requestId = getRequestId(req);
+    const startTime = Date.now();
+    const route = "/api/chat/rooms";
+
     try {
         const cookieHeader = req.headers.get("cookie");
         const authorizationHeader = req.headers.get("authorization");
         const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
+            const latencyMs = Date.now() - startTime;
+            recordRequestMetric("GET", route, 401, latencyMs);
+            logger.logRequest("GET", route, 401, latencyMs, { requestId });
             return NextResponse.json(
                 { error: "Unauthorized" },
                 { status: 401 }
@@ -81,9 +105,20 @@ export async function GET(req: NextRequest) {
             (room): room is NonNullable<typeof room> => room !== null
         );
 
+        const latencyMs = Date.now() - startTime;
+        recordRequestMetric("GET", route, 200, latencyMs);
+        logger.logRequest("GET", route, 200, latencyMs, {
+            requestId,
+            userId: session.user.id,
+            roomCount: roomsWithPreview.length,
+        });
+
         return NextResponse.json({ data: roomsWithPreview });
     } catch (error) {
-        console.error("[Chat Rooms API] Error:", error);
+        const latencyMs = Date.now() - startTime;
+        recordRequestMetric("GET", route, 500, latencyMs);
+        logger.error("[Chat Rooms API] Error", { requestId }, error as Error);
+        logger.logRequest("GET", route, 500, latencyMs, { requestId });
         return NextResponse.json(
             { error: "Internal server error" },
             { status: 500 }
@@ -93,12 +128,19 @@ export async function GET(req: NextRequest) {
 
 // POST /api/chat/rooms - Create a new chat room
 export async function POST(req: NextRequest) {
+    const requestId = getRequestId(req);
+    const startTime = Date.now();
+    const route = "/api/chat/rooms";
+
     try {
         const cookieHeader = req.headers.get("cookie");
         const authorizationHeader = req.headers.get("authorization");
         const session = await getApiSession(cookieHeader, authorizationHeader);
 
         if (!session) {
+            const latencyMs = Date.now() - startTime;
+            recordRequestMetric("POST", route, 401, latencyMs);
+            logger.logRequest("POST", route, 401, latencyMs, { requestId });
             return NextResponse.json(
                 { error: "Unauthorized" },
                 { status: 401 }
@@ -117,9 +159,20 @@ export async function POST(req: NextRequest) {
             })
             .returning();
 
+        const latencyMs = Date.now() - startTime;
+        recordRequestMetric("POST", route, 201, latencyMs);
+        logger.logRequest("POST", route, 201, latencyMs, {
+            requestId,
+            userId: session.user.id,
+            roomId: String(room.cr_id),
+        });
+
         return NextResponse.json({ data: room }, { status: 201 });
     } catch (error) {
-        console.error("[Chat Rooms API] Error:", error);
+        const latencyMs = Date.now() - startTime;
+        recordRequestMetric("POST", route, 500, latencyMs);
+        logger.error("[Chat Rooms API] Error", { requestId }, error as Error);
+        logger.logRequest("POST", route, 500, latencyMs, { requestId });
         return NextResponse.json(
             { error: "Internal server error" },
             { status: 500 }

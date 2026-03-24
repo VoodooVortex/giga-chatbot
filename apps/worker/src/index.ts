@@ -1,5 +1,6 @@
 import { RagUpdateListener } from "./listener";
 import { pool } from "./db";
+import { logWorkerEvent, workerMetrics } from "./queue";
 
 /**
  * RAG Worker Main Entry Point
@@ -9,12 +10,19 @@ import { pool } from "./db";
  */
 
 const listener = new RagUpdateListener();
+let heartbeatTimer: NodeJS.Timeout | null = null;
 
 /**
  * Graceful shutdown handler
  */
 async function shutdown(signal: string): Promise<void> {
-    console.log(`\n[Worker] Received ${signal}. Shutting down gracefully...`);
+    logWorkerEvent("info", "worker.shutdown_requested", { signal });
+    workerMetrics.increment("worker.shutdowns");
+
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
 
     try {
         // Stop the listener
@@ -23,10 +31,19 @@ async function shutdown(signal: string): Promise<void> {
         // Close database pool
         await pool.end();
 
-        console.log("[Worker] Shutdown complete");
+        logWorkerEvent("info", "worker.shutdown_complete", { signal });
         process.exit(0);
     } catch (error) {
-        console.error("[Worker] Error during shutdown:", error);
+        logWorkerEvent("error", "worker.shutdown_failed", {
+            signal,
+            error: error instanceof Error
+                ? {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack,
+                }
+                : { value: error },
+        });
         process.exit(1);
     }
 }
@@ -39,17 +56,37 @@ async function main(): Promise<void> {
     console.log("║           RAG Worker - Giga Chatbot                   ║");
     console.log("╚════════════════════════════════════════════════════════╝");
     console.log();
+    logWorkerEvent("info", "worker.starting", {
+        pid: process.pid,
+    });
+    workerMetrics.increment("worker.startups");
 
     try {
         // Register shutdown handlers
         process.on("SIGINT", () => shutdown("SIGINT"));
         process.on("SIGTERM", () => shutdown("SIGTERM"));
         process.on("uncaughtException", (error) => {
-            console.error("[Worker] Uncaught exception:", error);
+            logWorkerEvent("error", "worker.uncaught_exception", {
+                error: error instanceof Error
+                    ? {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack,
+                    }
+                    : { value: error },
+            });
             shutdown("uncaughtException");
         });
         process.on("unhandledRejection", (reason) => {
-            console.error("[Worker] Unhandled rejection:", reason);
+            logWorkerEvent("error", "worker.unhandled_rejection", {
+                reason: reason instanceof Error
+                    ? {
+                        name: reason.name,
+                        message: reason.message,
+                        stack: reason.stack,
+                    }
+                    : { value: reason },
+            });
             shutdown("unhandledRejection");
         });
 
@@ -60,18 +97,29 @@ async function main(): Promise<void> {
         console.log("[Worker] Running... Press Ctrl+C to stop");
         console.log();
 
-        // Keep the process alive
-        setInterval(() => {
+        heartbeatTimer = setInterval(() => {
             const stats = listener.getStats();
-            console.log(
-                `[Worker] Status: ${stats.isRunning ? "running" : "stopped"}, ` +
-                `Queue: ${stats.queueStats.pending} pending, ` +
-                `Processing: ${stats.queueStats.isProcessing ? "yes" : "no"}`
-            );
-        }, 30000); // Log stats every 30 seconds
+            workerMetrics.setGauge("worker.is_running", stats.isRunning ? 1 : 0);
+            workerMetrics.setGauge("worker.last_heartbeat_epoch_ms", Date.now());
+            logWorkerEvent("info", "worker.heartbeat", {
+                running: stats.isRunning,
+                queuePending: stats.queueStats.pending,
+                queueProcessing: stats.queueStats.isProcessing,
+                uptimeMs: stats.queueStats.metrics.uptimeMs,
+                metrics: stats.queueStats.metrics,
+            });
+        }, 30000);
 
     } catch (error) {
-        console.error("[Worker] Fatal error:", error);
+        logWorkerEvent("error", "worker.fatal_error", {
+            error: error instanceof Error
+                ? {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack,
+                }
+                : { value: error },
+        });
         await shutdown("fatal error");
     }
 }

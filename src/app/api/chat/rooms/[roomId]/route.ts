@@ -10,6 +10,8 @@ import { orchestrate } from "@/lib/ai/orchestrator";
 import { env } from "@/lib/config";
 import { db } from "@/lib/db";
 import { chatMessages, chatRooms } from "@/lib/db/schema";
+import { logger } from "@/lib/observability/logger";
+import { metrics, METRIC_NAMES } from "@/lib/observability/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +108,21 @@ function toChatStreamResponse(text: string, metadata?: unknown): Response {
   return createUIMessageStreamResponse({ stream });
 }
 
+function getRequestId(req: NextRequest): string {
+  return req.headers.get("x-request-id")?.trim() || crypto.randomUUID();
+}
+
+function recordRequestMetric(
+  method: string,
+  route: string,
+  status: number,
+  latencyMs: number,
+): void {
+  const labels = { method, route, status: String(status) };
+  metrics.counter(METRIC_NAMES.API_REQUESTS_TOTAL, labels);
+  metrics.histogram(METRIC_NAMES.API_REQUEST_DURATION, latencyMs, labels);
+}
+
 function buildUniqueRoomTitle(query: string, roomId: number): string {
   void roomId;
   const normalized = query.replace(/\s+/g, " ").trim();
@@ -131,11 +148,18 @@ async function orchestrateWithTimeout(
 }
 
 export async function POST(req: NextRequest, { params }: RouteParams) {
+  const requestId = getRequestId(req);
+  const startTime = Date.now();
+  const route = "/api/chat/rooms/[roomId]";
+
   try {
     const { roomId } = await params;
     const roomIdNum = Number.parseInt(roomId, 10);
 
     if (!Number.isFinite(roomIdNum)) {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, { requestId });
       return NextResponse.json({ error: "Bad request", message: "Invalid room id" }, { status: 400 });
     }
 
@@ -144,6 +168,9 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     const session = await getApiSession(cookieHeader, authorizationHeader);
 
     if (!session) {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 401, latencyMs);
+      logger.logRequest("POST", route, 401, latencyMs, { requestId });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -162,6 +189,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       .limit(1);
 
     if (!room) {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 404, latencyMs);
+      logger.logRequest("POST", route, 404, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomIdNum),
+      });
       return NextResponse.json({ error: "Room not found" }, { status: 404 });
     }
 
@@ -169,6 +203,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     const { messages } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomIdNum),
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Messages array is required" },
         { status: 400 },
@@ -177,6 +218,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role !== "user") {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomIdNum),
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Last message must be from user" },
         { status: 400 },
@@ -185,6 +233,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
     const userQuery = extractMessageTextDeep(lastMessage);
     if (!userQuery) {
+      const latencyMs = Date.now() - startTime;
+      recordRequestMetric("POST", route, 400, latencyMs);
+      logger.logRequest("POST", route, 400, latencyMs, {
+        requestId,
+        userId: session.user.id,
+        roomId: String(roomIdNum),
+      });
       return NextResponse.json(
         { error: "Bad request", message: "Last user message content is required" },
         { status: 400 },
@@ -244,6 +299,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       {
         query: userQuery,
         cookie: cookieHeader || undefined,
+        requestId,
         conversationHistory,
         useHybridSearch: env.ENABLE_RAG_HYBRID_SEARCH,
       },
@@ -257,14 +313,33 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       cm_status: result.intent === "blocked" ? "blocked" : "ok",
     });
 
+    const latencyMs = Date.now() - startTime;
+    recordRequestMetric("POST", route, 200, latencyMs);
+    metrics.counter(METRIC_NAMES.CHAT_MESSAGES_TOTAL, {
+      route: "room",
+      intent: result.intent,
+      status: "ok",
+    });
+    logger.logRequest("POST", route, 200, latencyMs, {
+      requestId,
+      userId: session.user.id,
+      roomId: String(roomIdNum),
+      intent: result.intent,
+    });
+
     return toChatStreamResponse(result.response, {
       intent: result.intent,
+      responsePath: result.responsePath,
+      timings: result.timings,
       sources: result.sources,
       roomId: roomIdNum,
-      requestId: crypto.randomUUID(),
+      requestId: result.requestId,
     });
   } catch (error) {
-    console.error("[Room Chat API] Error:", error);
+    const latencyMs = Date.now() - startTime;
+    recordRequestMetric("POST", route, 500, latencyMs);
+    logger.error("[Room Chat API] Error", { requestId }, error as Error);
+    logger.logRequest("POST", route, 500, latencyMs, { requestId });
     return NextResponse.json(
       {
         error: "Internal server error",
