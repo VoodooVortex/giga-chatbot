@@ -129,7 +129,7 @@ const ThreadWelcome: FC = () => {
 const ThreadSuggestions: FC = () => {
   const suggestions = [
     { text: "ตรวจสอบอุปกรณ์ที่ว่างใช้งาน" },
-    { text: "ต้องการแจ้งปัญหาอุปกรณ์" },
+    // { text: "ต้องการแจ้งปัญหาอุปกรณ์" },
     { text: "อยากทราบรายละเอียดของอุปกรณ์" },
   ];
 
