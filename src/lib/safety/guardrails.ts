@@ -30,19 +30,19 @@ const THAI_PROFANITY = [
 
 // Pattern variations (leet speak, spacing)
 const PROFANITY_PATTERNS = [
-    /f+u+c+k+/i,
-    /s+h+i+t+/i,
-    /b+i+t+c+h+/i,
-    /a+s+h+o+l+e+/i,
-    /d+a+m+n+/i,
-    /d+i+c+k+/i,
-    /p+u+s+y+/i,
-    /c+o+c+k+/i,
-    /b+a+s+t+a+r+d+/i,
-    /m+o+t+h+e+r+f+u+c+k+e+r+/i,
-    /c+u+n+t+/i,
-    /s+l+u+t+/i,
-    /w+h+o+r+e+/i,
+    /f{1,5}u{1,5}c{1,5}k{1,5}/i,
+    /s{1,5}h{1,5}i{1,5}t{1,5}/i,
+    /b{1,5}i{1,5}t{1,5}c{1,5}h{1,5}/i,
+    /a{1,5}s{1,5}h{1,5}o{1,5}l{1,5}e{1,5}/i,
+    /d{1,5}a{1,5}m{1,5}n{1,5}/i,
+    /d{1,5}i{1,5}c{1,5}k{1,5}/i,
+    /p{1,5}u{1,5}s{1,5}y{1,5}/i,
+    /c{1,5}o{1,5}c{1,5}k{1,5}/i,
+    /b{1,5}a{1,5}s{1,5}t{1,5}a{1,5}r{1,5}d{1,5}/i,
+    /m{1,5}o{1,5}t{1,5}h{1,5}e{1,5}r{1,5}f{1,5}u{1,5}c{1,5}k{1,5}e{1,5}r{1,5}/i,
+    /c{1,5}u{1,5}n{1,5}t{1,5}/i,
+    /s{1,5}l{1,5}u{1,5}t{1,5}/i,
+    /w{1,5}h{1,5}o{1,5}r{1,5}e{1,5}/i,
 ];
 
 /**
