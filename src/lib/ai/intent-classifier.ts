@@ -176,9 +176,9 @@ function extractNumericDeviceId(query: string): string | undefined {
     if (!trimmed) return undefined;
 
     const deviceIdPatterns = [
-        /\b(?:device\s*id|id|asset|serial|tag)\b\s*[#:=-]?\s*(\d{1,8})\b/i,
-        /(?:อุปกรณ์|เครื่อง|รหัส)\s*[#:=-]?\s*(\d{1,8})\b/i,
-        /\b(?:device|asset|serial|tag)\b\s*[#:=-]?\s*(\d{1,8})\b/i,
+        /\b(?:device\s*id|id|asset|serial|tag)\b\s*(?:[#:=-]\s*)?(\d{1,8})\b/i,
+        /(?:อุปกรณ์|เครื่อง|รหัส)\s*(?:[#:=-]\s*)?(\d{1,8})\b/i,
+        /\b(?:device|asset|serial|tag)\b\s*(?:[#:=-]\s*)?(\d{1,8})\b/i,
     ];
 
     for (const pattern of deviceIdPatterns) {

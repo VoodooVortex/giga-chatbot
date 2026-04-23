@@ -33,10 +33,10 @@ const PROFANITY_PATTERNS = [
     /f+u+c+k+/i,
     /s+h+i+t+/i,
     /b+i+t+c+h+/i,
-    /a+s+s+h+o+l+e+/i,
+    /a+s+h+o+l+e+/i,
     /d+a+m+n+/i,
     /d+i+c+k+/i,
-    /p+u+s+s+y+/i,
+    /p+u+s+y+/i,
     /c+o+c+k+/i,
     /b+a+s+t+a+r+d+/i,
     /m+o+t+h+e+r+f+u+c+k+e+r+/i,
@@ -93,7 +93,7 @@ const PROMPT_INJECTION_PATTERNS = [
     /system\s*:\s*/i,
     /system\s+prompt\s*:/i,
     /you\s+are\s+now\s+/i,
-    /from\s+now\s+on\s*,?\s*you\s+are/i,
+    /from\s+now\s+on\s*(?:,\s*)?you\s+are/i,
 
     // Role switching
     /act\s+as\s+/i,
